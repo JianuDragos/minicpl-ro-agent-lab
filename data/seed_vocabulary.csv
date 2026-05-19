@@ -1,0 +1,191 @@
+category,ro,en,concept_id
+greetings,salut,hello,greet_001
+greetings,bună,hi,greet_002
+greetings,bună dimineața,good morning,greet_003
+greetings,bună seara,good evening,greet_004
+greetings,noapte bună,good night,greet_005
+greetings,la revedere,goodbye,greet_006
+greetings,pa,bye,greet_007
+greetings,ne vedem,see you,greet_008
+greetings,mulțumesc,thank you,greet_009
+greetings,te rog,please,greet_010
+greetings,scuze,sorry,greet_011
+greetings,bine ai venit,welcome,greet_012
+greetings,ce faci,how are you,greet_013
+greetings,sunt bine,I am fine,greet_014
+greetings,încântat,nice to meet you,greet_015
+pronouns,eu,I,pro_001
+pronouns,tu,you,pro_002
+pronouns,el,he,pro_003
+pronouns,ea,she,pro_004
+pronouns,noi,we,pro_005
+pronouns,voi,you plural,pro_006
+pronouns,ei,they masculine,pro_007
+pronouns,ele,they feminine,pro_008
+pronouns,mie,me,pro_009
+pronouns,ție,to you,pro_010
+pronouns,lui,to him,pro_011
+pronouns,ei,to her,pro_012
+pronouns,al meu,mine,pro_013
+pronouns,al tău,yours,pro_014
+pronouns,acesta,this,pro_015
+pronouns,acela,that,pro_016
+pronouns,toți,all,pro_017
+pronouns,nimeni,nobody,pro_018
+verbs,a fi,to be,verb_001
+verbs,a avea,to have,verb_002
+verbs,a vrea,to want,verb_003
+verbs,a avea nevoie,to need,verb_004
+verbs,a face,to do,verb_005
+verbs,a merge,to go,verb_006
+verbs,a veni,to come,verb_007
+verbs,a vedea,to see,verb_008
+verbs,a ști,to know,verb_009
+verbs,a spune,to say,verb_010
+verbs,a întreba,to ask,verb_011
+verbs,a răspunde,to answer,verb_012
+verbs,a scrie,to write,verb_013
+verbs,a citi,to read,verb_014
+verbs,a crea,to create,verb_015
+verbs,a șterge,to delete,verb_016
+verbs,a salva,to save,verb_017
+verbs,a încărca,to load,verb_018
+verbs,a trimite,to send,verb_019
+verbs,a primi,to receive,verb_020
+verbs,a explica,to explain,verb_021
+verbs,a comprima,to compress,verb_022
+verbs,a codifica,to encode,verb_023
+verbs,a decodifica,to decode,verb_024
+verbs,a îmbunătăți,to improve,verb_025
+objects,apă,water,obj_001
+objects,mâncare,food,obj_002
+objects,pâine,bread,obj_003
+objects,cafea,coffee,obj_004
+objects,ceai,tea,obj_005
+objects,casă,house,obj_006
+objects,cameră,room,obj_007
+objects,masă,table,obj_008
+objects,scaun,chair,obj_009
+objects,carte,book,obj_010
+objects,telefon,phone,obj_011
+objects,calculator,computer,obj_012
+objects,tastatură,keyboard,obj_013
+objects,ecran,screen,obj_014
+objects,fișier,file,obj_015
+objects,dosar,folder,obj_016
+objects,text,text,obj_017
+objects,idee,idea,obj_018
+objects,limbaj,language,obj_019
+objects,simbol,symbol,obj_020
+objects,regulă,rule,obj_021
+objects,tabel,table,obj_022
+objects,raport,report,obj_023
+objects,proiect,project,obj_024
+objects,model,model,obj_025
+emotions,fericit,happy,emo_001
+emotions,trist,sad,emo_002
+emotions,obosit,tired,emo_003
+emotions,curios,curious,emo_004
+emotions,confuz,confused,emo_005
+emotions,calm,calm,emo_006
+emotions,îngrijorat,worried,emo_007
+emotions,furios,angry,emo_008
+emotions,uimit,surprised,emo_009
+emotions,interesat,interested,emo_010
+emotions,plictisit,bored,emo_011
+emotions,mulțumit,satisfied,emo_012
+emotions,nesigur,uncertain,emo_013
+emotions,motivat,motivated,emo_014
+emotions,atent,focused,emo_015
+questions,ce,what,q_001
+questions,cine,who,q_002
+questions,unde,where,q_003
+questions,când,when,q_004
+questions,de ce,why,q_005
+questions,cum,how,q_006
+questions,cât,how much,q_007
+questions,care,which,q_008
+questions,poți,can you,q_009
+questions,este,is it,q_010
+questions,ai,you have,q_011
+questions,vrei,do you want,q_012
+questions,înțelegi,do you understand,q_013
+questions,funcționează,does it work,q_014
+questions,continuăm,do we continue,q_015
+time,acum,now,time_001
+time,azi,today,time_002
+time,mâine,tomorrow,time_003
+time,ieri,yesterday,time_004
+time,dimineață,morning,time_005
+time,seară,evening,time_006
+time,noapte,night,time_007
+time,oră,hour,time_008
+time,minut,minute,time_009
+time,secundă,second,time_010
+time,săptămână,week,time_011
+time,lună,month,time_012
+time,an,year,time_013
+time,devreme,early,time_014
+time,târziu,late,time_015
+time,înainte,before,time_016
+time,după,after,time_017
+time,repede,fast,time_018
+time,lent,slow,time_019
+time,final,end,time_020
+actions,pornește,start,act_001
+actions,oprește,stop,act_002
+actions,rulează,run,act_003
+actions,testează,test,act_004
+actions,repară,fix,act_005
+actions,analizează,analyze,act_006
+actions,compară,compare,act_007
+actions,alege,choose,act_008
+actions,redu,reduce,act_009
+actions,scurtează,shorten,act_010
+actions,păstrează,preserve,act_011
+actions,schimbă,change,act_012
+actions,mută,move,act_013
+actions,copiază,copy,act_014
+actions,lipește,paste,act_015
+actions,caută,search,act_016
+actions,găsește,find,act_017
+actions,deschide,open,act_018
+actions,închide,close,act_019
+actions,actualizează,update,act_020
+actions,îmbină,merge,act_021
+actions,împarte,split,act_022
+actions,sortează,sort,act_023
+actions,filtrează,filter,act_024
+actions,măsoară,measure,act_025
+software/project terms,agent,agent,sw_001
+software/project terms,protocol,protocol,sw_002
+software/project terms,stare,state,sw_003
+software/project terms,rundă,round,sw_004
+software/project terms,experiment,experiment,sw_005
+software/project terms,vocabular,vocabulary,sw_006
+software/project terms,sarcină,task,sw_007
+software/project terms,prompt,prompt,sw_008
+software/project terms,răspuns,response,sw_009
+software/project terms,transcriere,transcript,sw_010
+software/project terms,jurnal,log,sw_011
+software/project terms,rezultat,result,sw_012
+software/project terms,metrică,metric,sw_013
+software/project terms,compresie,compression,sw_014
+software/project terms,raport final,final report,sw_015
+software/project terms,eroare,error,sw_016
+software/project terms,eșec,failure,sw_017
+software/project terms,simbol inventat,invented symbol,sw_018
+software/project terms,simbol reutilizat,reused symbol,sw_019
+software/project terms,derivă,drift,sw_020
+software/project terms,noutate,novelty,sw_021
+software/project terms,gramatică,grammar,sw_022
+software/project terms,identificator,identifier,sw_023
+software/project terms,cod scurt,short code,sw_024
+software/project terms,semnificație,meaning,sw_025
+software/project terms,decodor,decoder,sw_026
+software/project terms,encoder,encoder,sw_027
+software/project terms,arhitectură,architecture,sw_028
+software/project terms,prototip,prototype,sw_029
+software/project terms,configurație,configuration,sw_030
+software/project terms,temperatură,temperature,sw_031
+software/project terms,model local,local model,sw_032

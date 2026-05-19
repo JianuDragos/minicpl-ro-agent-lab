@@ -1,0 +1,17 @@
+[
+  {"id": "t001", "language": "ro", "phrase": "salut, ce faci?", "intent": "greeting_status"},
+  {"id": "t002", "language": "ro", "phrase": "vreau apă", "intent": "want_water"},
+  {"id": "t003", "language": "ro", "phrase": "poți să mă ajuți?", "intent": "request_help"},
+  {"id": "t004", "language": "ro", "phrase": "am nevoie de calculator", "intent": "need_computer"},
+  {"id": "t005", "language": "ro", "phrase": "explică proiectul", "intent": "explain_project"},
+  {"id": "t006", "language": "en", "phrase": "I want food", "intent": "want_food"},
+  {"id": "t007", "language": "en", "phrase": "I need help", "intent": "need_help"},
+  {"id": "t008", "language": "en", "phrase": "compress this meaning into the shortest machine protocol", "intent": "compress_meaning"},
+  {"id": "t009", "language": "en", "phrase": "invent a shorter encoding for this idea", "intent": "invent_encoding"},
+  {"id": "t010", "language": "ro", "phrase": "unde este fișierul?", "intent": "ask_file_location"},
+  {"id": "t011", "language": "en", "phrase": "the agent updates the protocol", "intent": "protocol_update"},
+  {"id": "t012", "language": "ro", "phrase": "sunt obosit dar curios", "intent": "emotion_state"},
+  {"id": "t013", "language": "en", "phrase": "run the experiment again tomorrow", "intent": "schedule_run"},
+  {"id": "t014", "language": "ro", "phrase": "trimite raportul final", "intent": "send_report"},
+  {"id": "t015", "language": "en", "phrase": "debug the software project", "intent": "debug_project"}
+]
