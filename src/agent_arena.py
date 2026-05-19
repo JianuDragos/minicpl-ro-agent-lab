@@ -92,6 +92,8 @@ class AgentArena:
                     model_response=response_text,
                     previous_compact=previous_compact,
                     known_symbols=self.protocol.known_symbols(),
+                    current_token_map=self.protocol.current_token_map,
+                    deprecated_tokens=self.protocol.deprecated_tokens,
                 )
                 self._add_rolling_metrics(metrics, round_records)
                 previous_compact = metrics.get("compact_phrase", previous_compact)
@@ -159,8 +161,12 @@ class AgentArena:
         else:
             phase_guidance = (
                 "Autonomous exploration phase. Give a broad objective-driven prompt. "
-                "Do not force a fixed format. Let Agent B decide whether to refine, abandon, "
-                "merge, redesign, create sub-languages, or communicate directly in the compact protocol."
+                "Prefer existing compact tokens from the current token map. If a needed concept "
+                "is missing, ask Agent B to declare it with <NEW meaning = token> and continue "
+                "in compact protocol. If a shorter or more systematic token appears, allow "
+                "<EVOLVE old_token -> new_token reason>. Do not force a fixed format; let Agent B "
+                "refine, abandon, merge, redesign, create sub-languages, or communicate directly "
+                "in the compact protocol."
             )
         return self.agent_a_prompt.format(
             round=round_index,
@@ -187,8 +193,11 @@ class AgentArena:
         else:
             phase_guidance = (
                 "Autonomous exploration: pursue token efficiency freely inside the protocol-design experiment. "
-                "You may answer mostly in the compact language, redesign it, merge protocol families, "
-                "or self-propose the next experiment. No external actions are allowed."
+                "Prefer existing compact tokens after they exist. If a concept is missing, create it "
+                "with <NEW normal_word_or_meaning = compact_token> and then continue in compact protocol. "
+                "If a better token appears, use <EVOLVE old_token -> new_token reason>. You may answer "
+                "mostly in compact language, redesign it, merge protocol families, or self-propose the "
+                "next experiment. No external actions are allowed."
             )
         return self.agent_b_prompt.format(
             round=round_index,

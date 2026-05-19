@@ -21,6 +21,10 @@ Important:
 - Unexpected or failed ideas are acceptable and should be explicit.
 - You may abandon failed ideas, merge protocol families, create sub-languages, or redesign the protocol.
 - You may communicate directly in the compact protocol when useful.
+- After bootstrap, prefer existing compact tokens once they exist.
+- If a needed concept is missing, declare it with `<NEW normal_word_or_meaning = compact_token>` and continue using compact protocol.
+- If a shorter or more systematic token replaces an old one, declare it with `<EVOLVE old_token -> new_token reason>` and prefer the new token afterward.
+- Use normal Romanian or English mainly for new concept declarations, short decode hints, or protocol mutation notes.
 - You must not request or imply operating-system or external actions; freedom is only inside this language-design experiment.
 
 No fixed format is required.

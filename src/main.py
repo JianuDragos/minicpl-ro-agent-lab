@@ -84,6 +84,10 @@ def replay_latest(root: Path) -> int:
             print(f"Agent A: {excerpt(event.get('agent_a_message', ''))}")
             print(f"Agent B: {excerpt(event.get('agent_b_response', ''))}")
             print(f"Compact: {metrics.get('compact_phrase', '')}")
+            print(f"NEW token events: {json.dumps(metrics.get('new_token_events', []), ensure_ascii=False)}")
+            print(f"EVOLVE token events: {json.dumps(metrics.get('token_evolution_events', []), ensure_ascii=False)}")
+            print(f"Compact continuity score: {metrics.get('compact_protocol_continuity_score', 0.0)}")
+            print(f"Deprecated token reuse: {json.dumps(metrics.get('deprecated_tokens_reused', []), ensure_ascii=False)}")
             print(f"Metrics: {json.dumps(metrics, ensure_ascii=False, sort_keys=True)}")
     return 0
 

@@ -46,3 +46,11 @@ python3 src/main.py --show-latest-report
 If the requested model fails, the client tries `gpt-oss:20b`. If both fail, the error is still logged as a malformed round so the unattended experiment can complete and report the failure.
 
 The autonomous phase deliberately does not force JSON or a fixed protocol format. The evaluator uses heuristics to observe compactness, reuse, leakage, stability, and drift.
+
+During autonomous exploration the prompts encourage lexicon continuity:
+
+- Reuse known compact tokens where possible.
+- Declare missing concepts with `<NEW meaning = token>`.
+- Declare replacements with `<EVOLVE old_token -> new_token reason>`.
+
+These markers are logged and reported when the model produces them, but the model is still allowed to redesign or abandon protocol families.

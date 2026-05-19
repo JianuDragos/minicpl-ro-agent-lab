@@ -38,6 +38,24 @@ The autonomous exploration phase gives broader objective-driven prompts. Agent B
 
 The agents cannot control the operating system or perform external actions. Their autonomy is limited to protocol design and protocol use inside the transcript.
 
+## Lexicon Growth
+
+After bootstrap, agents are encouraged to keep using compact tokens they have already created. When a concept is missing, they can declare it inline:
+
+```text
+<NEW "calculator" = C12>
+<NEW "I need help" = H?>
+```
+
+If a shorter or more systematic token replaces an existing token, they can declare an evolution:
+
+```text
+<EVOLVE C12 -> C2 shorter>
+<EVOLVE H? -> H because question mark is unnecessary>
+```
+
+The arena parses these literal markers and preserves them in protocol state as lexicon events, token evolution events, the current token map, deprecated tokens, and compact conversation examples. The markers are encouraged but not required; the creative rounds remain free-form.
+
 ## Round Loop
 
 1. Load seed vocabulary from `data/seed_vocabulary.csv`.
@@ -69,5 +87,11 @@ The agents cannot control the operating system or perform external actions. Thei
 - Protocol stability score.
 - Average compact length.
 - Best compression ratio so far.
+- New token events count.
+- Token evolution events count.
+- Human-language fallback count.
+- Compact protocol continuity score.
+- Token reuse after creation score.
+- Deprecated token reuse count.
 
 These metrics are deliberately approximate. They observe behavior without forcing a single correct protocol.

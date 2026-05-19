@@ -23,3 +23,6 @@ Constraints:
 Return whatever prompt is most useful for the current phase.
 During bootstrap, structured pressure is useful.
 During autonomous_exploration, broad objective-driven prompts are preferred over strict instructions.
+During autonomous_exploration, remind Agent B to reuse existing compact tokens from the protocol state when possible.
+If a needed concept is missing, Agent B may create it with `<NEW normal_word_or_meaning = compact_token>` and continue compactly.
+If a shorter or more systematic token replaces an old one, Agent B may use `<EVOLVE old_token -> new_token reason>`.
