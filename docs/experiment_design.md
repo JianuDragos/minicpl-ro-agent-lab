@@ -9,17 +9,47 @@ The experiment intentionally does not optimize for a readable human language. Ea
 
 The arena records raw prompts, raw model responses, protocol changes, and approximate metrics. Malformed output, failed ideas, and strange protocol drift are preserved as research signal.
 
+## Phases
+
+### bootstrap
+
+The bootstrap phase gives Agent A structured pressure:
+
+- compress this phrase
+- invent shorter symbols
+- preserve useful meaning
+- propose reusable rules
+
+This phase is meant to start protocol invention without locking the agents into one final format.
+
+### autonomous_exploration
+
+The autonomous exploration phase gives broader objective-driven prompts. Agent B may decide what to do next inside the language-design goal:
+
+- invent new symbols, numeric codes, byte-like codes, or grammar rules
+- compress words, phrases, or full meanings
+- abandon failed protocol ideas
+- merge protocol families
+- create domain sub-languages
+- use Romanian, English, symbols, IDs, or mixed forms
+- communicate directly in the compact language
+- explain less over time if a compact protocol stabilizes
+- self-propose new language-design experiments
+
+The agents cannot control the operating system or perform external actions. Their autonomy is limited to protocol design and protocol use inside the transcript.
+
 ## Round Loop
 
 1. Load seed vocabulary from `data/seed_vocabulary.csv`.
 2. Load seed tasks from `data/seed_tasks.json`.
-3. Build an Agent A pressure instruction using the current protocol state.
-4. Send Agent B a prompt through `http://localhost:11434/api/generate`.
-5. Always include `"think": false` in Ollama requests.
-6. Read the useful model answer from the Ollama `response` field.
-7. Extract a compact phrase heuristically.
-8. Record metrics and update protocol state.
-9. Append the full round record to `logs/transcript_*.jsonl`.
+3. Select `bootstrap` or `autonomous_exploration` from the round number.
+4. Build an Agent A pressure instruction using the current protocol state and phase.
+5. Send Agent B a prompt through `http://localhost:11434/api/generate`.
+6. Always include `"think": false` in Ollama requests.
+7. Read the useful model answer from the Ollama `response` field.
+8. Extract a compact phrase heuristically when possible.
+9. Record metrics and update protocol state.
+10. Append the full round record to `logs/transcript_*.jsonl`.
 
 ## Metrics
 
@@ -32,5 +62,12 @@ The arena records raw prompts, raw model responses, protocol changes, and approx
 - Protocol drift score.
 - Novelty score.
 - Best compact examples discovered.
+- Phase.
+- Compact-language usage score.
+- Known symbol reuse rate.
+- Natural-language leakage score.
+- Protocol stability score.
+- Average compact length.
+- Best compression ratio so far.
 
 These metrics are deliberately approximate. They observe behavior without forcing a single correct protocol.

@@ -19,12 +19,14 @@ class AgentArena:
         model: str,
         temperature: float,
         rounds: int,
+        bootstrap_rounds: int,
         ollama_url: str,
         root: Path,
     ) -> None:
         self.model = model
         self.temperature = temperature
         self.rounds = rounds
+        self.bootstrap_rounds = max(0, min(bootstrap_rounds, rounds))
         self.root = root
         self.ollama_url = ollama_url
         self.ollama = OllamaClient(base_url=ollama_url)
@@ -58,6 +60,7 @@ class AgentArena:
                     "model": self.model,
                     "temperature": self.temperature,
                     "rounds": self.rounds,
+                    "bootstrap_rounds": self.bootstrap_rounds,
                     "ollama_url": self.ollama_url,
                     "vocabulary_size": len(self.vocabulary),
                     "task_count": len(self.tasks),
@@ -65,9 +68,15 @@ class AgentArena:
             )
 
             for round_index in range(1, self.rounds + 1):
+                phase = self._phase_for_round(round_index)
                 task = self.tasks[(round_index - 1) % len(self.tasks)]
-                architect_message = self._build_agent_a_message(round_index, task)
-                model_prompt = self._build_agent_b_message(round_index, task, architect_message)
+                architect_message = self._build_agent_a_message(round_index, phase, task)
+                model_prompt = self._build_agent_b_message(
+                    round_index,
+                    phase,
+                    task,
+                    architect_message,
+                )
                 result = self.ollama.generate(
                     model_prompt,
                     model=self.model,
@@ -77,15 +86,18 @@ class AgentArena:
                 response_text = result.response if result.ok else f"OLLAMA_ERROR: {result.error}"
 
                 metrics = self.evaluator.evaluate(
+                    phase=phase,
                     natural_phrase=task["phrase"],
                     architect_message=architect_message,
                     model_response=response_text,
                     previous_compact=previous_compact,
                     known_symbols=self.protocol.known_symbols(),
                 )
+                self._add_rolling_metrics(metrics, round_records)
                 previous_compact = metrics.get("compact_phrase", previous_compact)
                 change = self.protocol.update_from_round(
                     round_index=round_index,
+                    phase=phase,
                     architect_notes=architect_message,
                     model_response=response_text,
                     metrics=metrics,
@@ -94,6 +106,7 @@ class AgentArena:
                 record = {
                     "event": "round_completed",
                     "round": round_index,
+                    "phase": phase,
                     "task": task,
                     "agent_a_message": architect_message,
                     "agent_b_prompt": model_prompt,
@@ -127,11 +140,32 @@ class AgentArena:
             "protocol_snapshot": self.protocol.snapshot(),
         }
 
-    def _build_agent_a_message(self, round_index: int, task: dict[str, Any]) -> str:
+    def _phase_for_round(self, round_index: int) -> str:
+        return "bootstrap" if round_index <= self.bootstrap_rounds else "autonomous_exploration"
+
+    def _build_agent_a_message(
+        self,
+        round_index: int,
+        phase: str,
+        task: dict[str, Any],
+    ) -> str:
         categories = ", ".join(sorted({item["category"] for item in self.vocabulary}))
         known = json.dumps(self.protocol.snapshot(), ensure_ascii=False)[:4000]
+        if phase == "bootstrap":
+            phase_guidance = (
+                "Bootstrap phase. Give structured pressure: compress the task phrase, "
+                "invent shorter symbols, preserve useful meaning, and propose reusable rules."
+            )
+        else:
+            phase_guidance = (
+                "Autonomous exploration phase. Give a broad objective-driven prompt. "
+                "Do not force a fixed format. Let Agent B decide whether to refine, abandon, "
+                "merge, redesign, create sub-languages, or communicate directly in the compact protocol."
+            )
         return self.agent_a_prompt.format(
             round=round_index,
+            phase=phase,
+            phase_guidance=phase_guidance,
             task=json.dumps(task, ensure_ascii=False),
             categories=categories,
             known_protocol=known,
@@ -140,17 +174,55 @@ class AgentArena:
     def _build_agent_b_message(
         self,
         round_index: int,
+        phase: str,
         task: dict[str, Any],
         architect_message: str,
     ) -> str:
         sample_vocab = self.vocabulary[:30]
+        if phase == "bootstrap":
+            phase_guidance = (
+                "Bootstrap: produce a compact candidate and any reusable symbols/rules. "
+                "A named compact/code/encoding line is helpful for measurement."
+            )
+        else:
+            phase_guidance = (
+                "Autonomous exploration: pursue token efficiency freely inside the protocol-design experiment. "
+                "You may answer mostly in the compact language, redesign it, merge protocol families, "
+                "or self-propose the next experiment. No external actions are allowed."
+            )
         return self.agent_b_prompt.format(
             round=round_index,
+            phase=phase,
+            phase_guidance=phase_guidance,
             task=json.dumps(task, ensure_ascii=False),
             architect_message=architect_message,
             vocabulary=json.dumps(sample_vocab, ensure_ascii=False),
             protocol=json.dumps(self.protocol.snapshot(), ensure_ascii=False)[:6000],
         )
+
+    def _add_rolling_metrics(
+        self,
+        metrics: dict[str, Any],
+        previous_records: list[dict[str, Any]],
+    ) -> None:
+        previous_metrics = [record["metrics"] for record in previous_records]
+        compact_lengths = [
+            item.get("compact_phrase_length", 0)
+            for item in previous_metrics
+            if item.get("compact_phrase_length", 0) > 0
+        ]
+        if metrics.get("compact_phrase_length", 0) > 0:
+            compact_lengths.append(metrics["compact_phrase_length"])
+
+        ratios = [item.get("compression_ratio", 0.0) for item in previous_metrics]
+        ratios.append(metrics.get("compression_ratio", 0.0))
+
+        metrics["average_compact_length"] = (
+            round(sum(compact_lengths) / len(compact_lengths), 4)
+            if compact_lengths
+            else 0.0
+        )
+        metrics["best_compression_ratio_so_far"] = round(max(ratios, default=0.0), 4)
 
     def _load_vocabulary(self, path: Path) -> list[dict[str, str]]:
         with path.open("r", encoding="utf-8", newline="") as handle:
