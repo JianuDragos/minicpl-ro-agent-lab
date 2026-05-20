@@ -15,8 +15,14 @@ The current project state includes:
 
 - A 4000-entry source dictionary at `data/dictionary_4000_source.csv`.
 - A generated compact language map at `results/language_map_4000.csv`.
+- An 8000-entry source dictionary at `data/dictionary_8000_source.csv`.
+- A generated 8000-entry compact language map at
+  `results/language_map_8000.csv`.
 - Companion exports at `results/language_map_4000.json` and
   `results/language_map_4000.md`.
+- Companion 8000-entry exports at `results/language_map_8000.json` and
+  `results/language_map_8000.md`.
+- A simple Python MiniCPL translator at `src/minicpl_translator.py`.
 - Phase 5 dual-agent debate/reward mode.
 - Phase 6 strict compact-language sender/receiver mode.
 - Codex acting as Sender / language designer in Phase 6.
@@ -26,13 +32,21 @@ The current project state includes:
 - Separate report sections for Codex compliance and Qwen receiver/responder
   behavior.
 
-The most important Phase 6 language base is:
+The current largest language base is:
+
+```text
+results/language_map_8000.csv
+```
+
+The previous Phase 6 language base is still available:
 
 ```text
 results/language_map_4000.csv
 ```
 
-That file is the required compact-token map for strict-language experiments.
+The translator automatically prefers the 8000-entry map when it exists and
+falls back to the 4000-entry map otherwise. Strict-language experiments can use
+either map through `--language-map`.
 
 ## Project Goals
 
@@ -66,6 +80,7 @@ hiding them.
 |-- data/
 |   |-- dictionary_2000_source.csv
 |   |-- dictionary_4000_source.csv
+|   |-- dictionary_8000_source.csv
 |   |-- seed_tasks.json
 |   `-- seed_vocabulary.csv
 |-- src/
@@ -78,6 +93,7 @@ hiding them.
 |   |-- evaluator.py
 |   |-- dictionary_2000.py
 |   |-- language_map.py
+|   |-- minicpl_translator.py
 |   `-- report_generator.py
 |-- logs/
 `-- results/
@@ -85,7 +101,7 @@ hiding them.
 
 `logs/` and `results/` are generated output directories. They are ignored by
 default, but selected baseline artifacts such as `results/language_map_4000.*`
-may be tracked intentionally.
+and `results/language_map_8000.*` may be tracked intentionally.
 
 ## Main Components
 
@@ -185,7 +201,12 @@ proof.
 
 ### `src/language_map.py`
 
-Generates and validates the full 4000-entry compact language map.
+Generates and validates compact language maps.
+
+Currently supported map sizes:
+
+- 4000 entries from `data/dictionary_4000_source.csv`.
+- 8000 entries from `data/dictionary_8000_source.csv`.
 
 The language map preserves:
 
@@ -211,6 +232,23 @@ Writes markdown reports for:
 
 Phase 6 reports include separate sections for Codex strict compliance and Qwen
 receiver/responder behavior.
+
+### `src/minicpl_translator.py`
+
+Simple deterministic translator for MiniCPL maps.
+
+It supports:
+
+- Human text to compact tokens.
+- Compact tokens to human meanings.
+- Phrase lookup.
+- Simple/fuzzy lookup by Romanian or English word.
+- Loading either `results/language_map_4000.csv` or
+  `results/language_map_8000.csv`.
+
+The translator prefers longer phrase matches before single-word matches. Unknown
+human words are emitted as `<UNK:word>`, and unknown compact tokens are emitted
+as `<UNK:token>`.
 
 ## Manual Codex vs Scripted Codex
 
@@ -240,21 +278,33 @@ Source vocabulary for the earlier 2000-entry compact dictionary.
 
 Current source vocabulary for the 4000-entry dictionary and language map.
 
-It is intended to cover:
+It covers daily language, technical terms, AI/LLM terms, project-management
+terms, cybersecurity/Linux terms, phrase macros, and grammar/compression
+markers.
+
+### `data/dictionary_8000_source.csv`
+
+Current expanded source vocabulary for the 8000-entry language map.
+
+The first 4000 entries preserve the existing 4000-entry source order. The added
+entries expand coverage for:
 
 - Daily conversation.
-- Emotions.
+- Social conversation.
 - Verbs.
-- Adjectives.
-- Places.
 - Objects.
-- School and university words.
-- Programming and software terms.
-- AI and LLM terms.
-- Project-management terms.
-- Cybersecurity and basic Linux terms.
-- Common phrase macros.
-- Grammar and compression markers.
+- Adjectives.
+- Emotions.
+- Places.
+- School and university concepts.
+- Programming and software concepts.
+- AI and LLM concepts.
+- Cybersecurity concepts.
+- Linux and terminal concepts.
+- Project-management concepts.
+- Grammar markers.
+- Phrase macros.
+- Story and narrative concepts.
 
 ### `data/seed_vocabulary.csv`
 
@@ -277,6 +327,9 @@ results/dictionary_4000.md
 results/language_map_4000.csv
 results/language_map_4000.json
 results/language_map_4000.md
+results/language_map_8000.csv
+results/language_map_8000.json
+results/language_map_8000.md
 results/phase6_strict_language_<run_id>.jsonl
 results/phase6_strict_language_<run_id>.md
 results/protocol_state_phase6_strict_language_<run_id>.json
@@ -324,6 +377,37 @@ Show the current language map summary and markdown export:
 
 ```bash
 python3 src/main.py --show-language-map-4000
+```
+
+Generate and validate the 8000-entry language map:
+
+```bash
+python3 src/main.py --generate-language-map-8000
+python3 src/main.py --validate-language-map-8000
+```
+
+Translate human MiniCPL input to compact tokens:
+
+```bash
+python3 src/main.py --translate-human "salut ce faci"
+```
+
+Expected output:
+
+```text
+1 J
+```
+
+Translate compact tokens back to human meanings:
+
+```bash
+python3 src/main.py --translate-compact "1 J"
+```
+
+Expected output:
+
+```text
+salut / hello | ce faci / how are you
 ```
 
 Run a small Phase 6 strict-language smoke test:
@@ -402,15 +486,113 @@ Show the language map validation summary and markdown export:
 python3 src/main.py --show-language-map-4000
 ```
 
+Generate the 8000-entry compact language map:
+
+```bash
+python3 src/main.py --generate-language-map-8000
+```
+
+Validate the 8000-entry compact language map:
+
+```bash
+python3 src/main.py --validate-language-map-8000
+```
+
+Show the 8000-entry language map validation summary and markdown export:
+
+```bash
+python3 src/main.py --show-language-map-8000
+```
+
 Expected validation properties for the current language map:
 
-- `total_entries` should be `4000`.
+- `total_entries` should be `4000` for the 4000 map.
+- `total_entries` should be `8000` for the 8000 map.
 - `duplicate_compact_token_count` should be `0`.
 - `missing_compact_token_count` should be `0`.
-- Average token length should be around `1.98`.
-- Max token length should be `2`.
+- Average token length should be around `1.98` for the 4000 map.
+- Average token length should be around `2.39` for the 8000 map.
+- Max token length should be `2` for the 4000 map.
+- Max token length should be `3` for the 8000 map.
 - Human-language-like token count should be `0`.
 - `valid` should be `True`.
+
+## MiniCPL Translator
+
+The translator is deterministic and does not call Qwen, Codex, or Ollama.
+
+By default, it loads:
+
+```text
+results/language_map_8000.csv
+```
+
+if that file exists. Otherwise it loads:
+
+```text
+results/language_map_4000.csv
+```
+
+Use a specific map with `--language-map`:
+
+```bash
+python3 src/main.py \
+  --language-map results/language_map_4000.csv \
+  --translate-human "salut ce faci"
+```
+
+Translate human text to compact:
+
+```bash
+python3 src/main.py --translate-human "salut ce faci"
+```
+
+Translate compact text to human meanings:
+
+```bash
+python3 src/main.py --translate-compact "1 J"
+```
+
+Unknown human words are preserved as unknown markers:
+
+```bash
+python3 src/main.py --translate-human "salut cuvântnecunoscut"
+```
+
+Example output:
+
+```text
+1 <UNK:cuvântnecunoscut>
+```
+
+Unknown compact tokens are also preserved:
+
+```bash
+python3 src/main.py --translate-compact "1 UNKNOWN_TOKEN"
+```
+
+Example output:
+
+```text
+salut / hello | <UNK:UNKNOWN_TOKEN>
+```
+
+Start the REPL:
+
+```bash
+python3 src/main.py --translator-repl
+```
+
+REPL usage:
+
+- Enter normal human text to encode it.
+- Use `:compact 1 J` to decode compact tokens.
+- Use `:lookup salut` to search Romanian/English meanings.
+- Use `:quit` to exit.
+
+The translator matches longer phrases first. For example, `salut ce faci` maps
+to `1 J`, not to a separate token sequence for `ce` plus `faci`, because
+`ce faci / how are you` is a known phrase.
 
 ## Running the Older Arena
 
@@ -766,6 +948,9 @@ Strict-language flags:
 - `--show-phase`
 - `--show-strict-language-report`
 - `--show-latest-qwen-prompt`
+- `--translate-human`
+- `--translate-compact`
+- `--translator-repl`
 
 Dictionary and language-map flags:
 
@@ -776,6 +961,9 @@ Dictionary and language-map flags:
 - `--generate-language-map-4000`
 - `--validate-language-map-4000`
 - `--show-language-map-4000`
+- `--generate-language-map-8000`
+- `--validate-language-map-8000`
+- `--show-language-map-8000`
 
 ## Development Checks
 
@@ -917,6 +1105,14 @@ For dictionary or language-map work:
 3. Validate the target artifact.
 4. Inspect the markdown export.
 5. Commit source and generated outputs together when the task requires it.
+
+For translator work:
+
+1. Update `src/minicpl_translator.py` or CLI wiring in `src/main.py`.
+2. Run `python3 -m py_compile src/main.py src/minicpl_translator.py`.
+3. Run `python3 src/main.py --translate-human "salut ce faci"`.
+4. Run `python3 src/main.py --translate-compact "1 J"`.
+5. Confirm unknown words produce `<UNK:...>` markers.
 
 For Phase 6 controller work:
 

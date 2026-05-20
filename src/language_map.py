@@ -10,6 +10,7 @@ from typing import Any
 
 from dictionary_2000 import (
     TARGET_ENTRY_COUNT_4000,
+    TARGET_ENTRY_COUNT_8000,
     Concept,
     DictionaryEntry,
     assign_tokens,
@@ -23,6 +24,10 @@ SOURCE_FILENAME_4000 = "dictionary_4000_source.csv"
 CSV_FILENAME_4000 = "language_map_4000.csv"
 JSON_FILENAME_4000 = "language_map_4000.json"
 MD_FILENAME_4000 = "language_map_4000.md"
+SOURCE_FILENAME_8000 = "dictionary_8000_source.csv"
+CSV_FILENAME_8000 = "language_map_8000.csv"
+JSON_FILENAME_8000 = "language_map_8000.json"
+MD_FILENAME_8000 = "language_map_8000.md"
 
 LANGUAGE_MAP_FIELDS = [
     "id",
@@ -55,11 +60,40 @@ class LanguageMapEntry:
 
 
 def generate_language_map_4000(root: Path) -> dict[str, Any]:
-    source_path = root / "data" / SOURCE_FILENAME_4000
+    return generate_language_map(
+        root=root,
+        target_entry_count=TARGET_ENTRY_COUNT_4000,
+        source_filename=SOURCE_FILENAME_4000,
+        csv_filename=CSV_FILENAME_4000,
+        json_filename=JSON_FILENAME_4000,
+        md_filename=MD_FILENAME_4000,
+    )
+
+
+def generate_language_map_8000(root: Path) -> dict[str, Any]:
+    return generate_language_map(
+        root=root,
+        target_entry_count=TARGET_ENTRY_COUNT_8000,
+        source_filename=SOURCE_FILENAME_8000,
+        csv_filename=CSV_FILENAME_8000,
+        json_filename=JSON_FILENAME_8000,
+        md_filename=MD_FILENAME_8000,
+    )
+
+
+def generate_language_map(
+    root: Path,
+    target_entry_count: int,
+    source_filename: str,
+    csv_filename: str,
+    json_filename: str,
+    md_filename: str,
+) -> dict[str, Any]:
+    source_path = root / "data" / source_filename
     concepts = read_source_concepts(source_path)
-    if len(concepts) != TARGET_ENTRY_COUNT_4000:
+    if len(concepts) != target_entry_count:
         raise RuntimeError(
-            f"{source_path} contains {len(concepts)} entries; expected {TARGET_ENTRY_COUNT_4000}."
+            f"{source_path} contains {len(concepts)} entries; expected {target_entry_count}."
         )
     dictionary_entries = assign_tokens(concepts)
     language_entries = [
@@ -68,14 +102,17 @@ def generate_language_map_4000(root: Path) -> dict[str, Any]:
 
     results_dir = root / "results"
     results_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = results_dir / CSV_FILENAME_4000
-    json_path = results_dir / JSON_FILENAME_4000
-    md_path = results_dir / MD_FILENAME_4000
+    csv_path = results_dir / csv_filename
+    json_path = results_dir / json_filename
+    md_path = results_dir / md_filename
 
     write_language_map_csv(csv_path, language_entries)
-    write_language_map_json(json_path, language_entries)
+    write_language_map_json(json_path, language_entries, source_filename)
     md_path.write_text(language_map_markdown(language_entries), encoding="utf-8")
-    validation = validate_language_map_entries(language_entries)
+    validation = validate_language_map_entries(
+        language_entries,
+        expected_count=target_entry_count,
+    )
     return {
         "source_path": source_path,
         "csv_path": csv_path,
@@ -86,17 +123,43 @@ def generate_language_map_4000(root: Path) -> dict[str, Any]:
 
 
 def validate_language_map_4000(root: Path) -> dict[str, Any]:
-    csv_path = root / "results" / CSV_FILENAME_4000
+    return validate_language_map_file(
+        root=root,
+        csv_filename=CSV_FILENAME_4000,
+        expected_count=TARGET_ENTRY_COUNT_4000,
+        generate_flag="--generate-language-map-4000",
+    )
+
+
+def validate_language_map_8000(root: Path) -> dict[str, Any]:
+    return validate_language_map_file(
+        root=root,
+        csv_filename=CSV_FILENAME_8000,
+        expected_count=TARGET_ENTRY_COUNT_8000,
+        generate_flag="--generate-language-map-8000",
+    )
+
+
+def validate_language_map_file(
+    root: Path,
+    csv_filename: str,
+    expected_count: int,
+    generate_flag: str,
+) -> dict[str, Any]:
+    csv_path = root / "results" / csv_filename
     if not csv_path.exists():
         raise FileNotFoundError(
-            f"{csv_path} does not exist. Run --generate-language-map-4000 first."
+            f"{csv_path} does not exist. Run {generate_flag} first."
         )
-    return validate_language_map_entries(read_language_map_csv(csv_path))
+    return validate_language_map_entries(
+        read_language_map_csv(csv_path),
+        expected_count=expected_count,
+    )
 
 
 def read_source_concepts(path: Path) -> list[Concept]:
     if not path.exists():
-        raise FileNotFoundError(f"{path} does not exist. Run --generate-dictionary-4000 first.")
+        raise FileNotFoundError(f"{path} does not exist. Create the source dictionary first.")
     with path.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     return [
@@ -132,16 +195,20 @@ def language_entry_from_dictionary_entry(entry: DictionaryEntry) -> LanguageMapE
 
 def write_language_map_csv(path: Path, entries: list[LanguageMapEntry]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=LANGUAGE_MAP_FIELDS)
+        writer = csv.DictWriter(handle, fieldnames=LANGUAGE_MAP_FIELDS, lineterminator="\n")
         writer.writeheader()
         for entry in entries:
             writer.writerow(asdict(entry))
 
 
-def write_language_map_json(path: Path, entries: list[LanguageMapEntry]) -> None:
+def write_language_map_json(
+    path: Path,
+    entries: list[LanguageMapEntry],
+    source_filename: str,
+) -> None:
     payload = {
-        "name": "MiniCPL-Ro 4000 compact language map",
-        "source": SOURCE_FILENAME_4000,
+        "name": f"MiniCPL-Ro {len(entries)} compact language map",
+        "source": source_filename,
         "entry_count": len(entries),
         "schema": LANGUAGE_MAP_FIELDS,
         "token_policy": {
@@ -177,7 +244,10 @@ def read_language_map_csv(path: Path) -> list[LanguageMapEntry]:
     ]
 
 
-def validate_language_map_entries(entries: list[LanguageMapEntry]) -> dict[str, Any]:
+def validate_language_map_entries(
+    entries: list[LanguageMapEntry],
+    expected_count: int = TARGET_ENTRY_COUNT_4000,
+) -> dict[str, Any]:
     token_counts: dict[str, int] = {}
     category_counts: dict[str, int] = {}
     missing_tokens: list[dict[str, Any]] = []
@@ -202,6 +272,7 @@ def validate_language_map_entries(entries: list[LanguageMapEntry]) -> dict[str, 
         if token and count > 1
     }
     average = round(total_token_length / len(entries), 4) if entries else 0.0
+    average_limit = 2.25 if expected_count <= TARGET_ENTRY_COUNT_4000 else 3.0
     return {
         "total_entries": len(entries),
         "duplicate_compact_tokens": duplicates,
@@ -214,12 +285,12 @@ def validate_language_map_entries(entries: list[LanguageMapEntry]) -> dict[str, 
         "human_language_like_token_count": len(human_like),
         "category_coverage": dict(sorted(category_counts.items())),
         "valid": (
-            len(entries) == TARGET_ENTRY_COUNT_4000
+            len(entries) == expected_count
             and not duplicates
             and not missing_tokens
             and not human_like
             and max_token_length <= 3
-            and average <= 2.25
+            and average <= average_limit
         ),
     }
 
@@ -271,9 +342,9 @@ def language_map_validation_report(validation: dict[str, Any]) -> str:
 
 
 def language_map_markdown(entries: list[LanguageMapEntry]) -> str:
-    validation = validate_language_map_entries(entries)
+    validation = validate_language_map_entries(entries, expected_count=len(entries))
     lines = [
-        "# MiniCPL-Ro 4000 Compact Language Map",
+        f"# MiniCPL-Ro {len(entries)} Compact Language Map",
         "",
         f"Entries: `{validation['total_entries']}`",
         f"Average token length: `{validation['average_token_length']}`",

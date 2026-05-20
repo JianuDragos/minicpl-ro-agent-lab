@@ -19,9 +19,12 @@ from dictionary_2000 import (
 from dual_agent_arena import DualAgentArena
 from language_map import (
     generate_language_map_4000,
+    generate_language_map_8000,
     language_map_validation_report,
     validate_language_map_4000,
+    validate_language_map_8000,
 )
+from minicpl_translator import MiniCPLTranslator, default_language_map_path
 from report_generator import ReportGenerator
 
 
@@ -48,6 +51,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--human-leak-penalty", type=int, default=100)
     parser.add_argument("--strict-retry-on-leak", action="store_true")
     parser.add_argument("--strict-max-retries", type=int, default=0)
+    parser.add_argument("--translate-human")
+    parser.add_argument("--translate-compact")
+    parser.add_argument("--translator-repl", action="store_true")
     parser.add_argument("--show-phase", type=int)
     parser.add_argument("--show-rewards", action="store_true")
     parser.add_argument("--show-strict-language-report", action="store_true")
@@ -59,6 +65,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--generate-language-map-4000", action="store_true")
     parser.add_argument("--validate-language-map-4000", action="store_true")
     parser.add_argument("--show-language-map-4000", action="store_true")
+    parser.add_argument("--generate-language-map-8000", action="store_true")
+    parser.add_argument("--validate-language-map-8000", action="store_true")
+    parser.add_argument("--show-language-map-8000", action="store_true")
     return parser.parse_args()
 
 
@@ -79,6 +88,12 @@ def main() -> int:
         return show_strict_language_report(root)
     if args.show_latest_qwen_prompt:
         return show_latest_qwen_prompt(root)
+    if args.translate_human is not None:
+        return translate_human_command(root, args.translate_human, args.language_map)
+    if args.translate_compact is not None:
+        return translate_compact_command(root, args.translate_compact, args.language_map)
+    if args.translator_repl:
+        return translator_repl_command(root, args.language_map)
     if args.generate_dictionary_2000:
         return generate_dictionary_2000_command(root)
     if args.validate_dictionary_2000:
@@ -93,6 +108,12 @@ def main() -> int:
         return validate_language_map_4000_command(root)
     if args.show_language_map_4000:
         return show_language_map_4000(root)
+    if args.generate_language_map_8000:
+        return generate_language_map_8000_command(root)
+    if args.validate_language_map_8000:
+        return validate_language_map_8000_command(root)
+    if args.show_language_map_8000:
+        return show_language_map_8000(root)
 
     if args.dual_agent:
         if not args.debate_mode:
@@ -307,6 +328,33 @@ def show_latest_qwen_prompt(root: Path) -> int:
     return 0
 
 
+def translate_human_command(root: Path, text: str, language_map: Path | None) -> int:
+    translator = translator_for(root, language_map)
+    print(translator.human_to_compact(text))
+    return 0
+
+
+def translate_compact_command(root: Path, text: str, language_map: Path | None) -> int:
+    translator = translator_for(root, language_map)
+    print(translator.compact_to_human(text))
+    return 0
+
+
+def translator_repl_command(root: Path, language_map: Path | None) -> int:
+    translator = translator_for(root, language_map)
+    translator.repl()
+    return 0
+
+
+def translator_for(root: Path, language_map: Path | None) -> MiniCPLTranslator:
+    path = (
+        default_language_map_path(root)
+        if language_map is None
+        else language_map if language_map.is_absolute() else root / language_map
+    )
+    return MiniCPLTranslator(path)
+
+
 def show_rewards(root: Path) -> int:
     path = latest_debate_jsonl(root)
     if not path:
@@ -420,6 +468,46 @@ def show_language_map_4000(root: Path) -> int:
     path = root / "results" / "language_map_4000.md"
     if not path.exists():
         print(f"{path} does not exist. Run --generate-language-map-4000 first.")
+        return 1
+
+    print(language_map_validation_report(validation))
+    print("")
+    print(path.read_text(encoding="utf-8"), end="")
+    return 0 if validation["valid"] else 1
+
+
+def generate_language_map_8000_command(root: Path) -> int:
+    result = generate_language_map_8000(root)
+    validation = result["validation"]
+    print(f"Source data: {result['source_path']}")
+    print(f"Language map CSV: {result['csv_path']}")
+    print(f"Language map JSON: {result['json_path']}")
+    print(f"Language map Markdown: {result['markdown_path']}")
+    print("")
+    print(language_map_validation_report(validation))
+    return 0 if validation["valid"] else 1
+
+
+def validate_language_map_8000_command(root: Path) -> int:
+    try:
+        validation = validate_language_map_8000(root)
+    except FileNotFoundError as exc:
+        print(str(exc))
+        return 1
+    print(language_map_validation_report(validation))
+    return 0 if validation["valid"] else 1
+
+
+def show_language_map_8000(root: Path) -> int:
+    try:
+        validation = validate_language_map_8000(root)
+    except FileNotFoundError as exc:
+        print(str(exc))
+        return 1
+
+    path = root / "results" / "language_map_8000.md"
+    if not path.exists():
+        print(f"{path} does not exist. Run --generate-language-map-8000 first.")
         return 1
 
     print(language_map_validation_report(validation))
