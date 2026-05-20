@@ -276,6 +276,243 @@ class ReportGenerator:
 
         output_path.write_text("\n".join(body) + "\n", encoding="utf-8")
 
+    def write_debate_report(
+        self,
+        output_path: Path,
+        debate_result: dict[str, Any],
+    ) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        records = debate_result.get("records", [])
+        tests = debate_result.get("tests", [])
+        protocol_snapshot = debate_result.get("protocol_snapshot", {})
+        phase_id = debate_result.get("phase_id", 5)
+        phase_name = debate_result.get("phase", f"phase{phase_id}_debate")
+        codex_records = [record for record in records if record.get("speaker") == "Codex"]
+        qwen_records = [record for record in records if record.get("speaker") == "Qwen"]
+        created = [
+            event
+            for record in records
+            for event in record.get("new_events", [])
+        ]
+        evolved = [
+            event
+            for record in records
+            for event in record.get("evolve_events", [])
+        ]
+        challenged = [
+            item
+            for record in records
+            for item in record.get("tokens_rejected_or_challenged", [])
+        ]
+        agreements = [
+            item
+            for record in records
+            for item in record.get("tokens_accepted", [])
+        ]
+        compact_usage = [
+            record.get("metrics", {}).get("compact_language_usage_score", 0.0)
+            for record in records
+        ]
+        leakage = [
+            record.get("metrics", {}).get("natural_language_leakage_score", 0.0)
+            for record in records
+        ]
+        best_tests = sorted(
+            tests,
+            key=lambda item: (
+                item.get("decode_success_score", 0.0),
+                item.get("compression_ratio", 0.0),
+            ),
+            reverse=True,
+        )[:8]
+        failed_tests = sorted(
+            [
+                item
+                for item in tests
+                if item.get("decode_success_score", 0.0) < 0.5
+            ],
+            key=lambda item: item.get("final_reward_score", 0.0),
+        )[:8]
+
+        body = [
+            "# MiniCPL-Ro Final Report",
+            "",
+            f"## Phase {phase_id} Debate Summary",
+            f"- Phase: `{phase_name}`",
+            f"- Run ID: `{debate_result.get('run_id', '')}`",
+            f"- Model: `{debate_result.get('model', '')}`",
+            f"- Temperature: `{debate_result.get('temperature', '')}`",
+            f"- Debate messages: `{len(records)}`",
+            f"- Sender/Receiver tests: `{len(tests)}`",
+            f"- Debate markdown: `{debate_result.get('markdown_path', '')}`",
+            f"- Debate JSONL: `{debate_result.get('jsonl_path', '')}`",
+            f"- Protocol state: `{debate_result.get('protocol_state_path', '')}`",
+            "",
+            "## Codex Arguments",
+            speaker_argument_lines(codex_records),
+            "",
+            "## Qwen Arguments",
+            speaker_argument_lines(qwen_records),
+            "",
+            "## Agreements",
+            bullet_or_empty(agreements, "No explicit agreements were detected."),
+            "",
+            "## Disagreements",
+            bullet_or_empty(challenged, "No explicit disagreements or challenges were detected."),
+            "",
+            "## Tokens Created During Debate",
+            debate_event_table(created, event_type="new"),
+            "",
+            "## Tokens Evolved During Debate",
+            debate_event_table(evolved, event_type="evolve"),
+            "",
+            "## Tokens Rejected Or Challenged",
+            bullet_or_empty(challenged, "No tokens were explicitly rejected or challenged."),
+            "",
+            "## Sender/Receiver Test Results",
+            sender_receiver_table(tests),
+            "",
+            "## Best Compression Examples",
+            sender_receiver_table(best_tests, empty_message="No successful compression examples were recorded."),
+            "",
+            "## Worst Decode Failures",
+            sender_receiver_table(failed_tests, empty_message="No decode failures below the threshold were recorded."),
+            "",
+            "## Reward Score Progress",
+            reward_progress_table(tests),
+            "",
+            "## Did They Use The Created Language?",
+            debate_language_use_summary(compact_usage, leakage, records),
+            "",
+            "## Vocabulary Target Progress",
+            f"- Starting dictionary size: `{debate_result.get('start_dictionary_size', 0)}`",
+            f"- Final dictionary size: `{debate_result.get('final_dictionary_size', 0)}`",
+            f"- New entries created: `{debate_result.get('new_entries_created', 0)}`",
+            f"- Target new entries: `{debate_result.get('target_new_entries', 0)}`",
+            f"- Current token map size: `{len(protocol_snapshot.get('current_token_map', {}))}`",
+            "",
+            "## Limitations",
+            "- Codex is called through the local `codex exec` CLI, so runtime behavior depends on local Codex authentication and CLI version.",
+            "- Sender/Receiver decoding is rule-based first and uses surface token lookup, not a full semantic parser.",
+            "- Reward scoring uses deterministic character and byte metrics; it does not yet measure BPE token cost.",
+            "- Natural-language leakage and compact-language usage are heuristic surface signals.",
+            "",
+            "## Next Steps",
+            "- Add optional Qwen-assisted receiver decoding when the rule-based receiver fails.",
+            "- Add per-category target quotas so large debate runs cover the seed vocabulary more evenly.",
+            "- Compare reward progress between simulated mode and true dual-agent mode.",
+            "- Add ambiguity-resolution tests for intentionally overloaded compact tokens.",
+        ]
+        output_path.write_text("\n".join(body) + "\n", encoding="utf-8")
+
+
+def speaker_argument_lines(records: list[dict[str, Any]], limit: int = 10) -> str:
+    if not records:
+        return "- No messages recorded."
+    lines = []
+    for record in records[:limit]:
+        compact = record.get("compact_message", "")
+        explanation = record.get("human_explanation_sentence", "")
+        new_count = len(record.get("new_events", []))
+        evolve_count = len(record.get("evolve_events", []))
+        lines.append(
+            f"- Turn {record.get('turn')}: `{compact}` "
+            f"(NEW `{new_count}`, EVOLVE `{evolve_count}`, decision `{record.get('debate_decision', '')}`)"
+        )
+        if explanation:
+            lines.append(f"  Explanation: {explanation}")
+    return "\n".join(lines)
+
+
+def bullet_or_empty(items: list[str], empty_message: str, limit: int = 20) -> str:
+    if not items:
+        return f"- {empty_message}"
+    return "\n".join(f"- {item}" for item in items[:limit])
+
+
+def debate_event_table(events: list[dict[str, Any]], event_type: str) -> str:
+    if not events:
+        return "- No events captured."
+    if event_type == "evolve":
+        lines = ["| Turn | Source | Old | New | Reason |", "|---:|---|---:|---:|---|"]
+        for event in events[:80]:
+            lines.append(
+                f"| {event.get('round', '')} | {event.get('source', '')} | "
+                f"`{escape_table(str(event.get('old_token', '')))}` | "
+                f"`{escape_table(str(event.get('new_token', '')))}` | "
+                f"{escape_table(str(event.get('reason', '')))} |"
+            )
+        return "\n".join(lines)
+
+    lines = ["| Turn | Source | Meaning | Token | Category |", "|---:|---|---|---:|---|"]
+    for event in events[:120]:
+        lines.append(
+            f"| {event.get('round', '')} | {event.get('source', '')} | "
+            f"{escape_table(str(event.get('meaning', '')))} | "
+            f"`{escape_table(str(event.get('token', '')))}` | "
+            f"{escape_table(str(event.get('category', '')))} |"
+        )
+    return "\n".join(lines)
+
+
+def sender_receiver_table(
+    tests: list[dict[str, Any]],
+    empty_message: str = "No Sender/Receiver tests recorded.",
+) -> str:
+    if not tests:
+        return f"- {empty_message}"
+    lines = [
+        "| Turn | Original | Compact | Decoded | Ratio | Decode | Reward |",
+        "|---:|---|---:|---|---:|---:|---:|",
+    ]
+    for test in tests[:40]:
+        lines.append(
+            f"| {test.get('turn', '')} | {escape_table(str(test.get('sender_original_sentence', '')))} | "
+            f"`{escape_table(str(test.get('sender_compact_sentence', '')))}` | "
+            f"{escape_table(str(test.get('receiver_decoded_sentence', '')))} | "
+            f"{test.get('compression_ratio', 0.0)} | "
+            f"{test.get('decode_success_score', 0.0)} | "
+            f"{test.get('final_reward_score', 0.0)} |"
+        )
+    return "\n".join(lines)
+
+
+def reward_progress_table(tests: list[dict[str, Any]]) -> str:
+    if not tests:
+        return "- No reward scores recorded."
+    lines = ["| Turn | Reward | Compression Ratio | Decode Score | Leakage Penalty |", "|---:|---:|---:|---:|---:|"]
+    for test in tests:
+        lines.append(
+            f"| {test.get('turn', '')} | {test.get('final_reward_score', 0.0)} | "
+            f"{test.get('compression_ratio', 0.0)} | {test.get('decode_success_score', 0.0)} | "
+            f"{test.get('natural_language_leakage_penalty', 0.0)} |"
+        )
+    return "\n".join(lines)
+
+
+def debate_language_use_summary(
+    compact_usage: list[float],
+    leakage: list[float],
+    records: list[dict[str, Any]],
+) -> str:
+    total_new = sum(len(record.get("new_events", [])) for record in records)
+    total_evolve = sum(len(record.get("evolve_events", [])) for record in records)
+    if safe_mean(compact_usage) >= 0.4 and safe_mean(leakage) <= 0.75:
+        tendency = "messages used compact-protocol signals substantially"
+    elif safe_mean(leakage) > 0.85:
+        tendency = "messages leaned heavily on human-language explanation"
+    else:
+        tendency = "messages mixed compact protocol with human-language scaffolding"
+    return "\n".join(
+        [
+            f"- Tendency: `{tendency}`",
+            f"- Average compact-language usage score: `{safe_mean(compact_usage):.4f}`",
+            f"- Average natural-language leakage score: `{safe_mean(leakage):.4f}`",
+            f"- NEW events in debate records: `{total_new}`",
+            f"- EVOLVE events in debate records: `{total_evolve}`",
+        ]
+    )
+
 
 def safe_mean(values: list[float]) -> float:
     return mean(values) if values else 0.0

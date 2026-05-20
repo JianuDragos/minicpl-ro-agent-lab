@@ -17,6 +17,7 @@ from protocol_state import (
 
 COMPACT_KEYS = ("compact", "encoding", "code", "protocol", "machine")
 NATURAL_WORD_RE = re.compile(r"[A-Za-zăâîșțĂÂÎȘȚ]{4,}")
+MEANING_WORD_RE = re.compile(r"[A-Za-zăâîșțĂÂÎȘȚ]+")
 PROTOCOL_MARKER_RE = re.compile(r"[#@$%&*+=:;./\\|!?~0-9_-]")
 
 
@@ -116,6 +117,49 @@ class Evaluator:
                 compact_usage=compact_usage,
                 malformed=malformed,
             ),
+        }
+
+    def score_sender_receiver(
+        self,
+        original: str,
+        compact: str,
+        decoded: str,
+        current_token_map: dict[str, str],
+    ) -> dict[str, Any]:
+        original_char_length = len(original)
+        compact_char_length = len(compact)
+        original_utf8_bytes = len(original.encode("utf-8"))
+        compact_utf8_bytes = len(compact.encode("utf-8"))
+        compression_ratio = (
+            round(original_char_length / compact_char_length, 4)
+            if compact_char_length
+            else 0.0
+        )
+        decode_success_score = self._decode_success_score(original, decoded)
+        token_reuse_score = self._sender_token_reuse_score(compact, current_token_map)
+        ambiguity_penalty = self._ambiguity_penalty(compact, current_token_map)
+        duplicate_token_penalty = self._duplicate_token_penalty(current_token_map)
+        natural_language_leakage_penalty = self._natural_language_leakage(compact)
+        final_reward_score = (
+            decode_success_score * 100
+            + compression_ratio * 50
+            + token_reuse_score * 20
+            - ambiguity_penalty * 30
+            - duplicate_token_penalty * 20
+            - natural_language_leakage_penalty * 20
+        )
+        return {
+            "original_char_length": original_char_length,
+            "compact_char_length": compact_char_length,
+            "original_utf8_bytes": original_utf8_bytes,
+            "compact_utf8_bytes": compact_utf8_bytes,
+            "compression_ratio": round(compression_ratio, 4),
+            "decode_success_score": round(decode_success_score, 4),
+            "token_reuse_score": round(token_reuse_score, 4),
+            "ambiguity_penalty": round(ambiguity_penalty, 4),
+            "duplicate_token_penalty": round(duplicate_token_penalty, 4),
+            "natural_language_leakage_penalty": round(natural_language_leakage_penalty, 4),
+            "final_reward_score": round(final_reward_score, 4),
         }
 
     def _extract_compact_phrase(self, text: str) -> str:
@@ -253,3 +297,48 @@ class Evaluator:
         if fallback_count:
             score *= 0.5
         return round(max(0.0, min(1.0, score + event_signal)), 4)
+
+    def _decode_success_score(self, original: str, decoded: str) -> float:
+        original_terms = set(MEANING_WORD_RE.findall(original.lower()))
+        decoded_terms = set(MEANING_WORD_RE.findall(decoded.lower()))
+        if not original_terms:
+            return 1.0 if decoded.strip() else 0.0
+        if not decoded_terms:
+            return 0.0
+        overlap = original_terms & decoded_terms
+        return min(1.0, len(overlap) / len(original_terms))
+
+    def _sender_token_reuse_score(
+        self,
+        compact: str,
+        current_token_map: dict[str, str],
+    ) -> float:
+        compact_parts = [part for part in re.split(r"\s+", compact.strip()) if part]
+        if not compact_parts:
+            return 0.0
+        known_tokens = set(current_token_map.values())
+        reused = sum(1 for part in compact_parts if part in known_tokens)
+        return reused / len(compact_parts)
+
+    def _ambiguity_penalty(
+        self,
+        compact: str,
+        current_token_map: dict[str, str],
+    ) -> float:
+        reverse: dict[str, int] = {}
+        for token in current_token_map.values():
+            reverse[token] = reverse.get(token, 0) + 1
+        compact_parts = [part for part in re.split(r"\s+", compact.strip()) if part]
+        if not compact_parts:
+            return 0.0
+        ambiguous = sum(1 for part in compact_parts if reverse.get(part, 0) > 1)
+        return min(1.0, ambiguous / len(compact_parts))
+
+    def _duplicate_token_penalty(self, current_token_map: dict[str, str]) -> float:
+        if not current_token_map:
+            return 0.0
+        counts: dict[str, int] = {}
+        for token in current_token_map.values():
+            counts[token] = counts.get(token, 0) + 1
+        duplicate_count = sum(count - 1 for count in counts.values() if count > 1)
+        return min(1.0, duplicate_count / max(1, len(current_token_map)))

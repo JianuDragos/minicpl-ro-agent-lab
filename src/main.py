@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_arena import AgentArena
+from dual_agent_arena import DualAgentArena
 from report_generator import ReportGenerator
 
 
@@ -23,6 +24,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--replay-latest", action="store_true")
     parser.add_argument("--show-latest-report", action="store_true")
     parser.add_argument("--export-dictionary", action="store_true")
+    parser.add_argument("--dual-agent", action="store_true")
+    parser.add_argument("--debate-mode", action="store_true")
+    parser.add_argument("--debate-turns-per-agent", type=int, default=10)
+    parser.add_argument("--debate-target-new-entries", type=int, default=200)
+    parser.add_argument("--phase-id", type=int, default=5)
+    parser.add_argument("--receiver-test", action="store_true")
+    parser.add_argument("--reward-mode", action="store_true")
+    parser.add_argument("--show-phase", type=int)
+    parser.add_argument("--show-rewards", action="store_true")
     return parser.parse_args()
 
 
@@ -35,6 +45,37 @@ def main() -> int:
         return show_latest_report(root)
     if args.export_dictionary:
         return export_dictionary(root)
+    if args.show_phase is not None:
+        return show_phase(root, args.show_phase)
+    if args.show_rewards:
+        return show_rewards(root)
+
+    if args.dual_agent:
+        if not args.debate_mode:
+            print("--dual-agent currently requires --debate-mode.")
+            return 1
+        arena = DualAgentArena(
+            model=args.model,
+            temperature=args.temperature,
+            phase_id=args.phase_id,
+            debate_turns_per_agent=args.debate_turns_per_agent,
+            debate_target_new_entries=args.debate_target_new_entries,
+            receiver_test=args.receiver_test,
+            reward_mode=args.reward_mode,
+            ollama_url=args.ollama_url,
+            root=root,
+        )
+        result = arena.run()
+        ReportGenerator().write_debate_report(
+            root / "results" / "final_report.md",
+            debate_result=result,
+        )
+        print(f"Run ID: {result['run_id']}")
+        print(f"Phase debate JSONL: {result['jsonl_path']}")
+        print(f"Phase debate Markdown: {result['markdown_path']}")
+        print(f"Protocol state: {result['protocol_state_path']}")
+        print(f"Final report: {root / 'results' / 'final_report.md'}")
+        return 0
 
     arena = AgentArena(
         model=args.model,
@@ -71,7 +112,11 @@ def main() -> int:
 
 
 def replay_latest(root: Path) -> int:
-    transcripts = sorted((root / "logs").glob("transcript_*.jsonl"))
+    debate = latest_debate_jsonl(root)
+    transcripts = sorted((root / "logs").glob("transcript_*.jsonl"), key=lambda path: path.stat().st_mtime)
+    if debate and (not transcripts or debate.stat().st_mtime >= transcripts[-1].stat().st_mtime):
+        return replay_debate(debate)
+
     if not transcripts:
         print("No transcript files found in logs/.")
         return 1
@@ -103,6 +148,35 @@ def replay_latest(root: Path) -> int:
     return 0
 
 
+def replay_debate(path: Path) -> int:
+    print(f"Replay debate: {path}")
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            event = json.loads(line)
+            event_type = event.get("event")
+            if event_type == "debate_message":
+                print("")
+                print(f"Turn: {event.get('turn')}")
+                print(f"Phase: {event.get('phase')}")
+                print(f"Speaker: {event.get('speaker')}")
+                print(f"Category: {event.get('active_vocabulary_category')}")
+                print(f"Message: {excerpt(event.get('response', ''), limit=500)}")
+                print(f"NEW token events: {json.dumps(event.get('new_events', []), ensure_ascii=False)}")
+                print(f"EVOLVE token events: {json.dumps(event.get('evolve_events', []), ensure_ascii=False)}")
+                print(f"Debate decision: {event.get('debate_decision', '')}")
+                print(f"Dictionary size: {event.get('current_dictionary_size_after_turn', 0)}")
+                print(f"Reward score: {event.get('reward_score', 0.0)}")
+            elif event_type == "sender_receiver_test":
+                print("")
+                print(f"Sender original: {event.get('sender_original_sentence', '')}")
+                print(f"Compact encoded: {event.get('sender_compact_sentence', '')}")
+                print(f"Receiver decoded: {event.get('receiver_decoded_sentence', '')}")
+                print(f"Compression ratio: {event.get('compression_ratio', 0.0)}")
+                print(f"Decode success: {event.get('decode_success')}")
+                print(f"Reward score: {event.get('final_reward_score', 0.0)}")
+    return 0
+
+
 def show_latest_report(root: Path) -> int:
     report = root / "results" / "final_report.md"
     if not report.exists():
@@ -113,7 +187,7 @@ def show_latest_report(root: Path) -> int:
 
 
 def export_dictionary(root: Path) -> int:
-    states = sorted((root / "results").glob("protocol_state_*.json"))
+    states = sorted((root / "results").glob("protocol_state_*.json"), key=lambda path: path.stat().st_mtime)
     if not states:
         print("No protocol state files found in results/.")
         return 1
@@ -136,6 +210,54 @@ def export_dictionary(root: Path) -> int:
     print(f"Dictionary Markdown: {md_path}")
     print(f"Entries: {len(rows)}")
     return 0
+
+
+def show_phase(root: Path, phase_id: int) -> int:
+    paths = sorted(
+        (root / "results").glob(f"phase{phase_id}_debate_*.md"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    if not paths:
+        print(f"No phase {phase_id} debate markdown files found.")
+        return 1
+    print(paths[-1].read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def show_rewards(root: Path) -> int:
+    path = latest_debate_jsonl(root)
+    if not path:
+        print("No phase debate JSONL files found.")
+        return 1
+    print(f"Rewards: {path}")
+    found = False
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            event = json.loads(line)
+            if event.get("event") != "sender_receiver_test":
+                continue
+            found = True
+            print(
+                "Turn {turn}: reward={reward} ratio={ratio} decode={decode} compact={compact}".format(
+                    turn=event.get("turn"),
+                    reward=event.get("final_reward_score", 0.0),
+                    ratio=event.get("compression_ratio", 0.0),
+                    decode=event.get("decode_success_score", 0.0),
+                    compact=event.get("sender_compact_sentence", ""),
+                )
+            )
+    if not found:
+        print("No sender/receiver reward records found.")
+        return 1
+    return 0
+
+
+def latest_debate_jsonl(root: Path) -> Path | None:
+    paths = sorted(
+        (root / "results").glob("phase*_debate_*.jsonl"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    return paths[-1] if paths else None
 
 
 def dictionary_rows(state: dict[str, Any]) -> list[dict[str, Any]]:

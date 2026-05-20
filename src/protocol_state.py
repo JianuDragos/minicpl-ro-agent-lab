@@ -8,8 +8,11 @@ from typing import Any
 
 
 SYMBOL_RE = re.compile(r"[A-Za-z0-9_#@$%&*+=:;./\\|!?~-]{1,12}")
-NEW_EVENT_RE = re.compile(r"<NEW\s+(.+?)\s*=\s*([^\s>]+)\s*>", re.IGNORECASE)
-EVOLVE_EVENT_RE = re.compile(r"<EVOLVE\s+([^\s>]+)\s*->\s*([^\s>]+)(?:\s+([^>]*?))?>", re.IGNORECASE)
+NEW_EVENT_RE = re.compile(r"<NEW\s+(.+?)\s*=\s*(>|[^\s>]+)(?:\s+[^>]*)?>", re.IGNORECASE)
+EVOLVE_EVENT_RE = re.compile(
+    r"<EVOLVE\s+([^\s>]+)\s*->\s*(>|[^\s>]+)(?:\s+(.+?))?(?<!-)>",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -32,6 +35,9 @@ class ProtocolState:
     vocabulary_coverage_ratio: float = 0.0
     categories_covered: list[str] = field(default_factory=list)
     tokenized_vocabulary_entries: dict[str, dict[str, Any]] = field(default_factory=dict)
+    debate_records: list[dict[str, Any]] = field(default_factory=list)
+    sender_receiver_tests: list[dict[str, Any]] = field(default_factory=list)
+    reward_history: list[dict[str, Any]] = field(default_factory=list)
     change_log: list[dict[str, Any]] = field(default_factory=list)
     _vocabulary_lookup: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
@@ -55,15 +61,18 @@ class ProtocolState:
         model_response: str,
         metrics: dict[str, Any],
         agent_a_lexicon_events: list[dict[str, Any]] | None = None,
+        model_event_source: str = "agent_b",
     ) -> dict[str, Any]:
         before = self.known_symbols()
         candidates = extract_symbols(model_response)
         lexicon_events = normalize_seed_events(agent_a_lexicon_events or [])
         model_lexicon_events = parse_new_token_events(model_response)
         for event in model_lexicon_events:
-            event["source"] = "agent_b"
+            event["source"] = model_event_source
         lexicon_events.extend(model_lexicon_events)
         evolution_events = parse_token_evolution_events(model_response)
+        for event in evolution_events:
+            event["source"] = model_event_source
 
         new_symbols = sorted(symbol for symbol in candidates if symbol not in before)
         reused_symbols = sorted(symbol for symbol in candidates if symbol in before)
@@ -128,7 +137,7 @@ class ProtocolState:
                 }
             )
 
-        if phase == "autonomous_exploration" and compact:
+        if (phase == "autonomous_exploration" or "debate" in phase) and compact:
             reused_known_tokens = tokens_used_in_text(model_response, set(self.current_token_map.values()))
             if (
                 metrics.get("compact_protocol_continuity_score", 0.0) >= 0.25
@@ -211,6 +220,9 @@ class ProtocolState:
             "vocabulary_coverage_ratio": self.vocabulary_coverage_ratio,
             "categories_covered": self.categories_covered,
             "tokenized_vocabulary_entries": self.tokenized_vocabulary_entries,
+            "debate_records": self.debate_records,
+            "sender_receiver_tests": self.sender_receiver_tests,
+            "reward_history": self.reward_history,
             "change_log": self.change_log,
         }
 
