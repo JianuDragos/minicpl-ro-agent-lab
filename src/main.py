@@ -46,6 +46,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--strict-language-mode", action="store_true")
     parser.add_argument("--language-map", type=Path)
     parser.add_argument("--human-leak-penalty", type=int, default=100)
+    parser.add_argument("--strict-retry-on-leak", action="store_true")
+    parser.add_argument("--strict-max-retries", type=int, default=0)
     parser.add_argument("--show-phase", type=int)
     parser.add_argument("--show-rewards", action="store_true")
     parser.add_argument("--show-strict-language-report", action="store_true")
@@ -106,6 +108,8 @@ def main() -> int:
             strict_language_mode=args.strict_language_mode,
             language_map_path=args.language_map,
             human_leak_penalty=args.human_leak_penalty,
+            strict_retry_on_leak=args.strict_retry_on_leak,
+            strict_max_retries=args.strict_max_retries,
         )
         result = arena.run()
         reporter = ReportGenerator()

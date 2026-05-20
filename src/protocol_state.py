@@ -9,10 +9,12 @@ from typing import Any
 
 SYMBOL_RE = re.compile(r"[A-Za-z0-9_#@$%&*+=:;./\\|!?~-]{1,12}")
 NEW_EVENT_RE = re.compile(r"<NEW\s+(.+?)\s*=\s*(>|[^\s>]+)(?:\s+[^>]*)?>", re.IGNORECASE)
+NEW_TAG_RE = re.compile(r"<NEW\b([^>]*)>", re.IGNORECASE | re.DOTALL)
 EVOLVE_EVENT_RE = re.compile(
     r"<EVOLVE\s+([^\s>]+)\s*->\s*(>|[^\s>]+)(?:\s+(.+?))?(?<!-)>",
     re.IGNORECASE,
 )
+ATTR_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"', re.DOTALL)
 
 
 @dataclass
@@ -312,12 +314,40 @@ def parse_new_token_events(text: str) -> list[dict[str, str]]:
     events: list[dict[str, str]] = []
     if text.strip().startswith("OLLAMA_ERROR:"):
         return events
+    attr_event_spans: set[tuple[int, int]] = set()
+    for match in NEW_TAG_RE.finditer(text):
+        attrs = parse_attrs(match.group(1))
+        meaning = (
+            attrs.get("human_meaning")
+            or attrs.get("meaning")
+            or attrs.get("human")
+            or ""
+        ).strip().strip("\"'`")
+        token = (
+            attrs.get("compact_token")
+            or attrs.get("token")
+            or attrs.get("compact")
+            or ""
+        ).strip().strip("\"'`")
+        if meaning == "human_meaning" or token == "compact_token":
+            continue
+        if meaning and token:
+            attr_event_spans.add(match.span())
+            events.append({"meaning": meaning, "token": token, "raw": match.group(0)})
     for match in NEW_EVENT_RE.finditer(text):
+        if any(start <= match.start() and match.end() <= end for start, end in attr_event_spans):
+            continue
         meaning = match.group(1).strip().strip("\"'`")
         token = match.group(2).strip().strip("\"'`")
+        if meaning == "human_meaning" or token == "compact_token":
+            continue
         if meaning and token:
             events.append({"meaning": meaning, "token": token, "raw": match.group(0)})
     return events
+
+
+def parse_attrs(attr_text: str) -> dict[str, str]:
+    return {match.group(1).lower(): match.group(2) for match in ATTR_RE.finditer(attr_text)}
 
 
 def normalize_seed_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

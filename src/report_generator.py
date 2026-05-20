@@ -414,6 +414,7 @@ class ReportGenerator:
         records = debate_result.get("records", [])
         tests = debate_result.get("tests", [])
         phase_id = debate_result.get("phase_id", 6)
+        qwen_records = [record for record in records if record.get("speaker") == "Qwen"]
         leaks = [
             record
             for record in records
@@ -443,8 +444,22 @@ class ReportGenerator:
             record.get("strict_language_compliance_score", 0.0)
             for record in records
         ]
+        qwen_receiver_scores = [
+            record.get("qwen_receiver_score", 0.0)
+            for record in qwen_records
+        ]
+        qwen_responder_scores = [
+            record.get("qwen_responder_score", 0.0)
+            for record in qwen_records
+        ]
+        qwen_alignment_scores = [
+            record.get("sender_receiver_alignment_score", 0.0)
+            for record in qwen_records
+        ]
         total_leaks = sum(record.get("human_words_leaked_count", 0) for record in records)
         total_penalty = sum(record.get("human_leak_penalty_total", 0) for record in records)
+        reply_leaks = sum(record.get("qwen_reply_human_leak_count", 0) for record in qwen_records)
+        decode_successes = sum(1 for record in qwen_records if record.get("qwen_decode_success"))
 
         body = [
             "# MiniCPL-Ro Final Report",
@@ -458,14 +473,39 @@ class ReportGenerator:
             f"- Language map: `{debate_result.get('language_map_path', '')}`",
             f"- Language map entries: `{debate_result.get('language_map_entry_count', 0)}`",
             f"- Human leak penalty: `{debate_result.get('human_leak_penalty', 0)}`",
+            f"- Strict retry on leak: `{debate_result.get('strict_retry_on_leak', False)}`",
+            f"- Strict max retries: `{debate_result.get('strict_max_retries', 0)}`",
             f"- Debate messages: `{len(records)}`",
             f"- Sender/Receiver tests: `{len(tests)}`",
             f"- Total leaked human words: `{total_leaks}`",
             f"- Total leak penalty: `{total_penalty}`",
             f"- Average dictionary token usage: `{safe_mean(usage):.4f}`",
             f"- Average strict compliance: `{safe_mean(compliance):.4f}`",
+            f"- Qwen decode successes: `{decode_successes}/{len(qwen_records)}`",
+            f"- Qwen reply human leaks: `{reply_leaks}`",
+            f"- Average Qwen receiver score: `{safe_mean(qwen_receiver_scores):.4f}`",
+            f"- Average Qwen responder score: `{safe_mean(qwen_responder_scores):.4f}`",
+            f"- Average sender/receiver alignment: `{safe_mean(qwen_alignment_scores):.4f}`",
             f"- Strict markdown: `{debate_result.get('markdown_path', '')}`",
             f"- Strict JSONL: `{debate_result.get('jsonl_path', '')}`",
+            "",
+            "## Qwen Receiver Summary",
+            qwen_receiver_summary(qwen_records),
+            "",
+            "## Decode Results",
+            qwen_decode_results_table(qwen_records),
+            "",
+            "## Compact Replies",
+            qwen_compact_replies_table(qwen_records),
+            "",
+            "## Decode Failures",
+            qwen_decode_failures_table(qwen_records),
+            "",
+            "## Human Leakage In Replies",
+            qwen_reply_leak_table(qwen_records),
+            "",
+            "## Sender/Receiver Alignment",
+            qwen_alignment_table(qwen_records),
             "",
             "## Human Leakage Violations",
             strict_leak_table(leaks),
@@ -703,6 +743,115 @@ def strict_reward_progress_table(tests: list[dict[str, Any]]) -> str:
             f"{test.get('compression_ratio', 0.0)} | "
             f"{test.get('decode_success_score', 0.0)} | "
             f"`{escape_table(str(test.get('sender_compact_sentence', '')))}` |"
+        )
+    return "\n".join(lines)
+
+
+def qwen_receiver_summary(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return "- No Qwen receiver records were captured."
+    decode_successes = sum(1 for record in records if record.get("qwen_decode_success"))
+    reply_leaks = sum(record.get("qwen_reply_human_leak_count", 0) for record in records)
+    receiver_scores = [record.get("qwen_receiver_score", 0.0) for record in records]
+    responder_scores = [record.get("qwen_responder_score", 0.0) for record in records]
+    alignment_scores = [record.get("sender_receiver_alignment_score", 0.0) for record in records]
+    return "\n".join(
+        [
+            f"- Qwen turns: `{len(records)}`",
+            f"- Decode successes: `{decode_successes}`",
+            f"- Decode failures: `{len(records) - decode_successes}`",
+            f"- Reply human leaks: `{reply_leaks}`",
+            f"- Average receiver score: `{safe_mean(receiver_scores):.4f}`",
+            f"- Average responder score: `{safe_mean(responder_scores):.4f}`",
+            f"- Average alignment score: `{safe_mean(alignment_scores):.4f}`",
+        ]
+    )
+
+
+def qwen_decode_results_table(records: list[dict[str, Any]], limit: int = 40) -> str:
+    if not records:
+        return "- No decode results were captured."
+    lines = [
+        "| Turn | Input Compact | Decoded Meaning | Expected Meaning | Success | Receiver Score |",
+        "|---:|---:|---|---|---:|---:|",
+    ]
+    for record in records[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | "
+            f"`{escape_table(str(record.get('decoded_compact_input', '')))}` | "
+            f"{escape_table(str(record.get('decoded_meaning', '')))} | "
+            f"{escape_table(str(record.get('qwen_expected_decoded_meaning', '')))} | "
+            f"{record.get('qwen_decode_success', False)} | "
+            f"{record.get('qwen_receiver_score', 0.0)} |"
+        )
+    return "\n".join(lines)
+
+
+def qwen_compact_replies_table(records: list[dict[str, Any]], limit: int = 40) -> str:
+    if not records:
+        return "- No compact replies were captured."
+    lines = [
+        "| Turn | Compact Reply | Usage | Unknown | Reply Leaks | Responder Score | Retries |",
+        "|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for record in records[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | "
+            f"`{escape_table(str(record.get('compact_reply', '')))}` | "
+            f"{record.get('qwen_reply_token_usage_rate', 0.0)} | "
+            f"{record.get('qwen_reply_unknown_token_count', 0)} | "
+            f"{record.get('qwen_reply_human_leak_count', 0)} | "
+            f"{record.get('qwen_responder_score', 0.0)} | "
+            f"{record.get('qwen_retry_count', 0)} |"
+        )
+    return "\n".join(lines)
+
+
+def qwen_decode_failures_table(records: list[dict[str, Any]], limit: int = 20) -> str:
+    failures = [record for record in records if not record.get("qwen_decode_success")]
+    if not failures:
+        return "- No Qwen decode failures were detected."
+    return qwen_decode_results_table(failures, limit=limit)
+
+
+def qwen_reply_leak_table(records: list[dict[str, Any]], limit: int = 20) -> str:
+    leaking = [
+        record
+        for record in records
+        if record.get("qwen_reply_human_leak_count", 0) > 0
+    ]
+    if not leaking:
+        return "- No human leakage was detected inside Qwen REPLY compact fields."
+    lines = [
+        "| Turn | Leaks | Penalty | Words | Compact Reply |",
+        "|---:|---:|---:|---|---:|",
+    ]
+    for record in sorted(leaking, key=lambda item: item.get("qwen_reply_human_leak_count", 0), reverse=True)[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | "
+            f"{record.get('qwen_reply_human_leak_count', 0)} | "
+            f"{record.get('qwen_reply_penalty', record.get('reply_penalty', 0))} | "
+            f"{escape_table(', '.join(record.get('qwen_reply_human_leaks', [])[:12]))} | "
+            f"`{escape_table(str(record.get('compact_reply', '')))}` |"
+        )
+    return "\n".join(lines)
+
+
+def qwen_alignment_table(records: list[dict[str, Any]], limit: int = 40) -> str:
+    if not records:
+        return "- No sender/receiver alignment records were captured."
+    lines = [
+        "| Turn | Receiver Score | Responder Score | Alignment | Decode | Reply |",
+        "|---:|---:|---:|---:|---|---:|",
+    ]
+    for record in records[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | "
+            f"{record.get('qwen_receiver_score', 0.0)} | "
+            f"{record.get('qwen_responder_score', 0.0)} | "
+            f"{record.get('sender_receiver_alignment_score', 0.0)} | "
+            f"{escape_table(str(record.get('decoded_meaning', '')))} | "
+            f"`{escape_table(str(record.get('compact_reply', '')))}` |"
         )
     return "\n".join(lines)
 

@@ -48,8 +48,16 @@ STRICT_PHASE_TEMPLATE = "phase{phase_id}_strict_language"
 WORD_RE = re.compile(r"[\wăâîșțĂÂÎȘȚ]+", re.UNICODE)
 HUMAN_WORD_RE = re.compile(r"[A-Za-zăâîșțĂÂÎȘȚ]+", re.UNICODE)
 NEW_OR_EVOLVE_RE = re.compile(r"<(?:NEW|EVOLVE)\b[^>]*>", re.IGNORECASE | re.DOTALL)
-SEND_OR_RECV_RE = re.compile(r"<(?:SEND|RECV)\b[^>]*>", re.IGNORECASE | re.DOTALL)
+FIELD_TAG_RE = re.compile(r"<(?:SEND|RECV|DECODE|REPLY)\b[^>]*>", re.IGNORECASE | re.DOTALL)
 COMPACT_ATTR_RE = re.compile(r'\bcompact="([^"]*)"', re.IGNORECASE)
+DECODE_TAG_RE = re.compile(r"<DECODE\b([^>]*)>", re.IGNORECASE | re.DOTALL)
+REPLY_TAG_RE = re.compile(r"<REPLY\b([^>]*)>", re.IGNORECASE | re.DOTALL)
+REPLY_COMPACT_TAG_RE = re.compile(
+    r"<REPLY\b[^>]*\bcompact=\"(?P<compact>.*?)\"\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+ATTR_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"', re.DOTALL)
+STRICT_ALLOWED_CONTROL_TOKENS = {"STRICT_FAIL_NO_TOKEN"}
 
 
 class DualAgentArena:
@@ -67,6 +75,8 @@ class DualAgentArena:
         strict_language_mode: bool = False,
         language_map_path: Path | None = None,
         human_leak_penalty: int = 0,
+        strict_retry_on_leak: bool = False,
+        strict_max_retries: int = 0,
     ) -> None:
         self.model = model
         self.temperature = temperature
@@ -85,6 +95,8 @@ class DualAgentArena:
         self.root = root
         self.language_map_path = self._resolve_language_map_path(language_map_path)
         self.human_leak_penalty = max(0, human_leak_penalty)
+        self.strict_retry_on_leak = strict_retry_on_leak
+        self.strict_max_retries = max(0, strict_max_retries)
         self.ollama = OllamaClient(base_url=ollama_url, timeout_seconds=240)
         self.codex = CodexClient(root=root, timeout_seconds=600)
         self.evaluator = Evaluator()
@@ -147,6 +159,8 @@ class DualAgentArena:
                     "strict_language_mode": self.strict_language_mode,
                     "language_map_path": str(self.language_map_path) if self.strict_language_mode else "",
                     "human_leak_penalty": self.human_leak_penalty,
+                    "strict_retry_on_leak": self.strict_retry_on_leak,
+                    "strict_max_retries": self.strict_max_retries,
                     "language_map_entry_count": len(self.language_map_entries),
                 },
             )
@@ -188,6 +202,7 @@ class DualAgentArena:
                     category=category,
                     context=context,
                 )
+                codex_compact_input = strict_compact_message(codex_response)
 
                 qwen_prompt = self._build_agent_prompt(
                     speaker="Qwen",
@@ -209,12 +224,31 @@ class DualAgentArena:
                     if qwen_result.ok
                     else f"OLLAMA_ERROR: {qwen_result.error}"
                 )
+                qwen_receiver_metrics = {}
+                qwen_retry_count = 0
+                qwen_initial_response = qwen_response
+                if self.strict_language_mode:
+                    qwen_response, qwen_result, qwen_receiver_metrics, qwen_retry_count = (
+                        self._finalize_qwen_receiver_response(
+                            initial_response=qwen_response,
+                            initial_result=qwen_result,
+                            codex_compact_input=codex_compact_input,
+                            context=qwen_prompt,
+                            category=category,
+                            turn=turn,
+                        )
+                    )
                 qwen_update = self._apply_agent_message(
                     speaker="Qwen",
                     response=qwen_response,
                     turn=turn,
                     category=category,
                     context=qwen_prompt,
+                    extra_metrics={
+                        **qwen_receiver_metrics,
+                        "qwen_retry_count": qwen_retry_count,
+                        "qwen_initial_response": qwen_initial_response,
+                    } if self.strict_language_mode else None,
                 )
 
                 strict_turn_penalty = (
@@ -301,6 +335,8 @@ class DualAgentArena:
                     "strict_language_mode": self.strict_language_mode,
                     "language_map_path": str(self.language_map_path) if self.strict_language_mode else "",
                     "human_leak_penalty": self.human_leak_penalty,
+                    "strict_retry_on_leak": self.strict_retry_on_leak,
+                    "strict_max_retries": self.strict_max_retries,
                 },
             )
 
@@ -324,6 +360,8 @@ class DualAgentArena:
             "strict_language_mode": self.strict_language_mode,
             "language_map_path": str(self.language_map_path) if self.strict_language_mode else "",
             "human_leak_penalty": self.human_leak_penalty,
+            "strict_retry_on_leak": self.strict_retry_on_leak,
+            "strict_max_retries": self.strict_max_retries,
             "language_map_entry_count": len(self.language_map_entries),
         }
 
@@ -334,6 +372,7 @@ class DualAgentArena:
         turn: int,
         category: str,
         context: str,
+        extra_metrics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         metrics = self.evaluator.evaluate(
             phase=self.phase_name,
@@ -347,6 +386,8 @@ class DualAgentArena:
         )
         if self.strict_language_mode:
             metrics.update(self._strict_language_metrics(response))
+        if extra_metrics:
+            metrics.update(extra_metrics)
         self.previous_compact = metrics.get("compact_phrase", self.previous_compact)
         change = self.protocol.update_from_round(
             round_index=self.message_index,
@@ -399,6 +440,10 @@ class DualAgentArena:
         if self.strict_language_mode:
             strict_metrics = strict_record_metrics(update["metrics"])
             record.update(strict_metrics)
+            if speaker == "Qwen":
+                record.update(qwen_receiver_record_metrics(update["metrics"], response))
+                if record.get("qwen_reply_compact"):
+                    record["compact_message"] = record["qwen_reply_compact"]
         if isinstance(result, CodexResult):
             record.update(
                 {
@@ -424,9 +469,11 @@ class DualAgentArena:
                     "receiver_decoded_sentence": test_result.get("receiver_decoded_sentence", ""),
                     "reward_score": test_result.get("final_reward_score", 0.0),
                     "compression_ratio": test_result.get("compression_ratio", 0.0),
-                    "decode_success": test_result.get("decode_success", False),
+                    "sender_receiver_decode_success": test_result.get("decode_success", False),
                 }
             )
+            if not (self.strict_language_mode and speaker == "Qwen"):
+                record["decode_success"] = test_result.get("decode_success", False)
         return record
 
     def _run_sender_receiver_test(
@@ -608,12 +655,23 @@ Previous message from {other_agent}:
         context: str,
         last_message: str,
     ) -> str:
+        if speaker == "Qwen":
+            return self._build_qwen_receiver_prompt(
+                other_agent=other_agent,
+                turn=turn,
+                category=category,
+                vocabulary_batch=vocabulary_batch,
+                context=context,
+                codex_message=last_message,
+            )
+
         return f"""You are Agent {speaker} in MiniCPL-Ro Phase {self.phase_id} strict compact-language mode.
 Your dialogue partner is {other_agent}. This is a language/protocol design debate only.
 Do not run commands, edit files, browse, request external actions, or control the operating system.
 Return only your debate message.
 
 STRICT LANGUAGE MODE IS ACTIVE.
+Role: Codex Sender / language designer.
 Required language base: {self.language_map_path}
 Human leak penalty: -{self.human_leak_penalty} per leaked human word.
 
@@ -624,6 +682,7 @@ Hard rules:
 - Do not write normal English or Romanian in compact messages.
 - Human language is allowed only inside original/source sentence fields, receiver decoded output fields, <NEW human_meaning = compact_token>, and <EVOLVE old_token -> new_token reason>.
 - If a needed meaning is missing, create it with <NEW human_meaning = compact_token>.
+- Use real one-line NEW declarations such as <NEW pe mine / me accusative = pA1>. Do not output placeholder text such as <NEW human_meaning = compact_token>.
 - If a token is inefficient, evolve it with <EVOLVE old_token -> new_token reason>.
 - Phrase macros are allowed with <NEW human_phrase = compact_token>, then use the compact token afterward.
 - Keep decode ability: use <SEND original="..." compact="..."> and <RECV compact="..." decoded="..."> only when useful.
@@ -644,6 +703,63 @@ Compact context:
 
 Previous message from {other_agent}:
 {excerpt(last_message, 1800) if last_message else "No previous message for this turn."}
+"""
+
+    def _build_qwen_receiver_prompt(
+        self,
+        other_agent: str,
+        turn: int,
+        category: str,
+        vocabulary_batch: list[dict[str, str]],
+        context: str,
+        codex_message: str,
+    ) -> str:
+        compact_input = strict_compact_message(codex_message)
+        return f"""You are Agent Qwen in MiniCPL-Ro Phase {self.phase_id} strict compact-language mode.
+Your dialogue partner is {other_agent}. You are the Receiver + compact responder.
+Do not run commands, edit files, browse, request external actions, or control the operating system.
+Return only the required receiver/responder message.
+
+STRICT RECEIVER/RESPONDER MODE IS ACTIVE.
+Required language base: {self.language_map_path}
+Human leak penalty: -{self.human_leak_penalty} per leaked human word in REPLY compact.
+
+Codex compact input to decode:
+{compact_input}
+
+Compact input token decoder hints:
+{self._compact_token_hints(compact_input)}
+
+Required output format:
+<DECODE compact="{escape_attr(compact_input)}" meaning="human meaning here">
+<REPLY compact="compact tokens only here">
+
+Hard rules:
+- The DECODE meaning field may contain Romanian/English.
+- The REPLY compact field must contain only compact tokens from the language map, newly declared compact tokens, or STRICT_FAIL_NO_TOKEN when decoding fails.
+- Do not write normal English or Romanian outside the DECODE meaning field or <NEW human_meaning = compact_token>.
+- Every human word inside REPLY compact receives -{self.human_leak_penalty}.
+- If you cannot decode the input, output exactly:
+  <DECODE compact="{escape_attr(compact_input)}" meaning="UNKNOWN">
+  <REPLY compact="STRICT_FAIL_NO_TOKEN">
+- If a needed concept is missing, create it with <NEW human_meaning = compact_token>, then continue compactly in REPLY.
+- Use real one-line NEW declarations such as <NEW pe mine / me accusative = pA1>. Do not output placeholder text such as <NEW human_meaning = compact_token>.
+- Separate compact tokens with spaces.
+
+Active category: {category}
+Turn: {turn}
+
+Core language-map tokens:
+{self._strict_core_token_lines(limit=80)}
+
+Focused language-map tokens for this turn:
+{format_vocabulary_batch(vocabulary_batch)}
+
+Compact context:
+{context}
+
+Full Codex message:
+{excerpt(codex_message, 2400) if codex_message else "No Codex message."}
 """
 
     def _build_context(
@@ -804,6 +920,25 @@ Previous message from {other_agent}:
             for item in batch[:40]
         )
 
+    def _compact_token_hints(self, compact: str) -> str:
+        if not compact:
+            return "No compact input."
+        reverse: dict[str, list[str]] = {}
+        for meaning, token in self.protocol.current_token_map.items():
+            reverse.setdefault(token, []).append(meaning)
+        lines = []
+        for token in strict_atoms(compact):
+            meanings = reverse.get(token)
+            if meanings:
+                lines.append(f"- {token} = {meanings[0]}")
+                continue
+            entry = self.language_token_to_entry.get(token)
+            if entry:
+                lines.append(f"- {token} = {entry.meaning}")
+            else:
+                lines.append(f"- {token} = UNKNOWN")
+        return "\n".join(lines)
+
     def _resolve_language_map_path(self, path: Path | None) -> Path:
         if path is None:
             return self.root / "results" / "language_map_4000.csv"
@@ -843,15 +978,12 @@ Previous message from {other_agent}:
             self.language_token_set
             | set(self.protocol.current_token_map.values())
             | strict_declared_tokens(response)
+            | STRICT_ALLOWED_CONTROL_TOKENS
         )
         atoms = strict_atoms(strict_text)
         known_atoms = [atom for atom in atoms if atom in allowed_tokens]
         unknown_atoms = [atom for atom in atoms if atom not in allowed_tokens]
-        leaked_words = [
-            word
-            for word in HUMAN_WORD_RE.findall(strict_text)
-            if word not in allowed_tokens
-        ]
+        leaked_words = human_words_from_unknown_atoms(unknown_atoms)
         total_atoms = len(known_atoms) + len(unknown_atoms)
         usage_rate = round(len(known_atoms) / total_atoms, 4) if total_atoms else 0.0
         leak_penalty_total = len(leaked_words) * self.human_leak_penalty
@@ -867,6 +999,198 @@ Previous message from {other_agent}:
             "unknown_tokens": unknown_atoms[:50],
             "strict_language_compliance_score": compliance,
             "strict_language_reward": -leak_penalty_total,
+        }
+
+    def _finalize_qwen_receiver_response(
+        self,
+        initial_response: str,
+        initial_result: OllamaResult,
+        codex_compact_input: str,
+        context: str,
+        category: str,
+        turn: int,
+    ) -> tuple[str, OllamaResult, dict[str, Any], int]:
+        response = initial_response
+        result = initial_result
+        metrics = self._qwen_receiver_metrics(response, codex_compact_input)
+        retry_count = 0
+        while (
+            self.strict_retry_on_leak
+            and retry_count < self.strict_max_retries
+            and self._qwen_retry_needed(metrics)
+        ):
+            retry_count += 1
+            retry_prompt = self._build_qwen_retry_prompt(
+                codex_compact_input=codex_compact_input,
+                decoded_meaning=metrics.get("qwen_decode_meaning", ""),
+                compact_reply=metrics.get("qwen_reply_compact", ""),
+                reply_human_leaks=metrics.get("qwen_reply_human_leaks", []),
+                context=context,
+                category=category,
+                turn=turn,
+            )
+            retry_result = self.ollama.generate(
+                retry_prompt,
+                model=self.model,
+                temperature=self.temperature,
+                fallback=True,
+            )
+            retry_response = (
+                retry_result.response
+                if retry_result.ok
+                else f"OLLAMA_ERROR: {retry_result.error}"
+            )
+            response = merge_qwen_retry_response(response, retry_response)
+            result = retry_result
+            metrics = self._qwen_receiver_metrics(response, codex_compact_input)
+        metrics["qwen_retry_count"] = retry_count
+        return response, result, metrics, retry_count
+
+    def _qwen_retry_needed(self, metrics: dict[str, Any]) -> bool:
+        return (
+            metrics.get("qwen_reply_human_leak_count", 0) > 0
+            or metrics.get("qwen_reply_outside_allowed_format", False)
+            or not metrics.get("qwen_reply_compact", "")
+        )
+
+    def _build_qwen_retry_prompt(
+        self,
+        codex_compact_input: str,
+        decoded_meaning: str,
+        compact_reply: str,
+        reply_human_leaks: list[str],
+        context: str,
+        category: str,
+        turn: int,
+    ) -> str:
+        if not decoded_meaning:
+            return f"""You omitted the required receiver/responder format.
+Return exactly one DECODE tag and one REPLY tag.
+
+Required output:
+<DECODE compact="{escape_attr(codex_compact_input)}" meaning="human meaning here">
+<REPLY compact="compact tokens only here">
+
+Rules:
+- Human language is allowed only inside the DECODE meaning field.
+- REPLY compact must use compact tokens only.
+- If you cannot decode, use meaning="UNKNOWN" and <REPLY compact="STRICT_FAIL_NO_TOKEN">.
+
+Compact input token decoder hints:
+{self._compact_token_hints(codex_compact_input)}
+
+Active category: {category}
+Turn: {turn}
+
+Compact context:
+{excerpt(context, 1800)}
+"""
+        return f"""Your DECODE was allowed, but your REPLY violated compact-only mode.
+Rewrite only the REPLY using compact tokens.
+
+Required output:
+<REPLY compact="compact tokens only here">
+
+Rules:
+- Do not include human words in REPLY compact.
+- Use compact tokens from {self.language_map_path} or tokens declared with <NEW>.
+- If you cannot form a compact reply, use <REPLY compact="STRICT_FAIL_NO_TOKEN">.
+
+Codex compact input:
+{codex_compact_input}
+
+Existing DECODE meaning:
+{decoded_meaning or "UNKNOWN"}
+
+Invalid REPLY compact:
+{compact_reply}
+
+Human leaks in REPLY:
+{", ".join(reply_human_leaks) if reply_human_leaks else "none"}
+
+Active category: {category}
+Turn: {turn}
+
+Focused language-map tokens:
+{self._strict_batch_summary(self._strict_language_batch(category, limit=40))}
+
+Compact context:
+{excerpt(context, 1800)}
+"""
+
+    def _qwen_receiver_metrics(
+        self,
+        response: str,
+        codex_compact_input: str,
+    ) -> dict[str, Any]:
+        parsed = parse_qwen_receiver_response(response)
+        decoded_compact = parsed.get("decoded_compact_input", "")
+        decoded_meaning = parsed.get("decoded_meaning", "")
+        compact_reply = parsed.get("compact_reply", "")
+        expected_meaning = self._decode_compact(codex_compact_input)
+        decode_score = receiver_decode_score(
+            expected_compact=codex_compact_input,
+            decoded_compact=decoded_compact,
+            expected_meaning=expected_meaning,
+            decoded_meaning=decoded_meaning,
+        )
+        reply_metrics = self._strict_reply_metrics(compact_reply, response)
+        responder_score = reply_metrics["qwen_responder_score"]
+        if compact_reply.strip() == "STRICT_FAIL_NO_TOKEN":
+            responder_score = 0.0
+        decode_success = decode_score >= 0.5 and decoded_meaning.strip().upper() != "UNKNOWN"
+        alignment = round((decode_score * 0.7) + (responder_score * 0.3), 4)
+        return {
+            "qwen_decode_success": decode_success,
+            "qwen_decode_meaning": decoded_meaning,
+            "qwen_reply_compact": compact_reply,
+            "qwen_reply_human_leak_count": reply_metrics["qwen_reply_human_leak_count"],
+            "qwen_receiver_score": decode_score,
+            "qwen_responder_score": responder_score,
+            "sender_receiver_alignment_score": alignment,
+            "raw_qwen_response": response,
+            "decoded_compact_input": decoded_compact,
+            "decoded_meaning": decoded_meaning,
+            "compact_reply": compact_reply,
+            "decode_success": decode_success,
+            "reply_human_leaks": reply_metrics["qwen_reply_human_leaks"],
+            "reply_penalty": reply_metrics["qwen_reply_penalty"],
+            "qwen_reply_human_leaks": reply_metrics["qwen_reply_human_leaks"],
+            "qwen_reply_penalty": reply_metrics["qwen_reply_penalty"],
+            "qwen_expected_decoded_meaning": expected_meaning,
+            "qwen_reply_unknown_token_count": reply_metrics["qwen_reply_unknown_token_count"],
+            "qwen_reply_unknown_tokens": reply_metrics["qwen_reply_unknown_tokens"],
+            "qwen_reply_token_usage_rate": reply_metrics["qwen_reply_token_usage_rate"],
+            "qwen_reply_outside_allowed_format": parsed.get("outside_allowed_format", False),
+        }
+
+    def _strict_reply_metrics(
+        self,
+        compact_reply: str,
+        response: str,
+    ) -> dict[str, Any]:
+        allowed_tokens = (
+            self.language_token_set
+            | set(self.protocol.current_token_map.values())
+            | strict_declared_tokens(response)
+            | STRICT_ALLOWED_CONTROL_TOKENS
+        )
+        atoms = strict_atoms(compact_reply)
+        known_atoms = [atom for atom in atoms if atom in allowed_tokens]
+        unknown_atoms = [atom for atom in atoms if atom not in allowed_tokens]
+        human_leaks = human_words_from_unknown_atoms(unknown_atoms)
+        total_atoms = len(known_atoms) + len(unknown_atoms)
+        usage_rate = round(len(known_atoms) / total_atoms, 4) if total_atoms else 0.0
+        leak_factor = max(0.0, 1.0 - (len(human_leaks) / max(1, total_atoms)))
+        responder_score = round(usage_rate * leak_factor, 4)
+        return {
+            "qwen_reply_human_leak_count": len(human_leaks),
+            "qwen_reply_human_leaks": human_leaks[:50],
+            "qwen_reply_penalty": len(human_leaks) * self.human_leak_penalty,
+            "qwen_reply_unknown_token_count": len(unknown_atoms),
+            "qwen_reply_unknown_tokens": unknown_atoms[:50],
+            "qwen_reply_token_usage_rate": usage_rate,
+            "qwen_responder_score": responder_score,
         }
 
     def _load_latest_protocol_state(self) -> ProtocolState:
@@ -1031,7 +1355,8 @@ def format_vocabulary_batch(batch: list[dict[str, str]]) -> str:
 
 def strict_scored_text(text: str) -> str:
     compact_parts = COMPACT_ATTR_RE.findall(text)
-    cleaned = SEND_OR_RECV_RE.sub(" ", text)
+    cleaned = REPLY_COMPACT_TAG_RE.sub(" ", text)
+    cleaned = FIELD_TAG_RE.sub(" ", cleaned)
     cleaned = NEW_OR_EVOLVE_RE.sub(" ", cleaned)
     return " ".join(compact_parts + [cleaned])
 
@@ -1039,9 +1364,19 @@ def strict_scored_text(text: str) -> str:
 def strict_declared_tokens(text: str) -> set[str]:
     tokens: set[str] = set()
     for tag in NEW_OR_EVOLVE_RE.findall(text):
+        attrs = parse_attrs(tag)
+        attr_token_found = False
+        for key in ("compact_token", "token", "compact"):
+            if attrs.get(key):
+                tokens.add(attrs[key].strip())
+                attr_token_found = True
+        if attr_token_found:
+            continue
         new_match = re.search(r"=\s*([^\s>]+)", tag)
         if new_match:
-            tokens.add(new_match.group(1).strip())
+            token = new_match.group(1).strip()
+            if token != "compact_token":
+                tokens.add(token)
         evolve_match = re.search(r"->\s*([^\s>]+)", tag)
         if evolve_match:
             tokens.add(evolve_match.group(1).strip())
@@ -1060,6 +1395,13 @@ def strict_atoms(text: str) -> list[str]:
     return atoms
 
 
+def human_words_from_unknown_atoms(unknown_atoms: list[str]) -> list[str]:
+    words: list[str] = []
+    for atom in unknown_atoms:
+        words.extend(HUMAN_WORD_RE.findall(atom))
+    return words
+
+
 def strict_record_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     list_keys = {"human_words_leaked", "unknown_tokens"}
     keys = (
@@ -1074,6 +1416,109 @@ def strict_record_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
         "strict_language_reward",
     )
     return {key: metrics.get(key, [] if key in list_keys else 0) for key in keys}
+
+
+def qwen_receiver_record_metrics(metrics: dict[str, Any], response: str) -> dict[str, Any]:
+    list_keys = {"reply_human_leaks", "qwen_reply_human_leaks", "qwen_reply_unknown_tokens"}
+    keys = (
+        "qwen_decode_success",
+        "qwen_decode_meaning",
+        "qwen_reply_compact",
+        "qwen_reply_human_leak_count",
+        "qwen_receiver_score",
+        "qwen_responder_score",
+        "sender_receiver_alignment_score",
+        "raw_qwen_response",
+        "decoded_compact_input",
+        "decoded_meaning",
+        "compact_reply",
+        "decode_success",
+        "reply_human_leaks",
+        "reply_penalty",
+        "qwen_reply_human_leaks",
+        "qwen_reply_penalty",
+        "qwen_expected_decoded_meaning",
+        "qwen_reply_unknown_token_count",
+        "qwen_reply_unknown_tokens",
+        "qwen_reply_token_usage_rate",
+        "qwen_retry_count",
+    )
+    record = {
+        key: metrics.get(key, [] if key in list_keys else "")
+        for key in keys
+    }
+    record["raw_qwen_response"] = metrics.get("raw_qwen_response") or response
+    return record
+
+
+def strict_compact_message(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.upper().startswith("<NEW") or stripped.upper().startswith("<EVOLVE"):
+            continue
+        compact_match = COMPACT_ATTR_RE.search(stripped)
+        if compact_match:
+            return compact_match.group(1).strip()
+        if stripped.startswith("<"):
+            continue
+        return stripped[:500]
+    return ""
+
+
+def parse_qwen_receiver_response(response: str) -> dict[str, Any]:
+    decode_match = DECODE_TAG_RE.search(response)
+    reply_match = REPLY_COMPACT_TAG_RE.search(response)
+    decode_attrs = parse_attrs(decode_match.group(1) if decode_match else "")
+    compact_reply = reply_match.group("compact") if reply_match else ""
+    outside = response
+    for match in list(DECODE_TAG_RE.finditer(response)) + list(REPLY_COMPACT_TAG_RE.finditer(response)):
+        outside = outside.replace(match.group(0), " ")
+    outside = REPLY_TAG_RE.sub(" ", outside)
+    outside = NEW_OR_EVOLVE_RE.sub(" ", outside)
+    outside_allowed_format = bool(HUMAN_WORD_RE.findall(outside))
+    return {
+        "decoded_compact_input": decode_attrs.get("compact", ""),
+        "decoded_meaning": decode_attrs.get("meaning", ""),
+        "compact_reply": compact_reply,
+        "decode_tag": decode_match.group(0) if decode_match else "",
+        "reply_tag": reply_match.group(0) if reply_match else "",
+        "outside_allowed_format": outside_allowed_format,
+    }
+
+
+def parse_attrs(attr_text: str) -> dict[str, str]:
+    return {match.group(1).lower(): match.group(2) for match in ATTR_RE.finditer(attr_text)}
+
+
+def merge_qwen_retry_response(original_response: str, retry_response: str) -> str:
+    retry_parsed = parse_qwen_receiver_response(retry_response)
+    if retry_parsed.get("decode_tag"):
+        return retry_response
+    original_parsed = parse_qwen_receiver_response(original_response)
+    decode_tag = original_parsed.get("decode_tag", "")
+    if decode_tag:
+        return "\n".join(part for part in [decode_tag, retry_response.strip()] if part)
+    return retry_response
+
+
+def receiver_decode_score(
+    expected_compact: str,
+    decoded_compact: str,
+    expected_meaning: str,
+    decoded_meaning: str,
+) -> float:
+    if not decoded_compact.strip() or not decoded_meaning.strip():
+        return 0.0
+    if decoded_meaning.strip().upper() == "UNKNOWN":
+        return 0.0
+    compact_score = 1.0 if decoded_compact.strip() == expected_compact.strip() else 0.0
+    expected_terms = set(HUMAN_WORD_RE.findall(expected_meaning.lower()))
+    decoded_terms = set(HUMAN_WORD_RE.findall(decoded_meaning.lower()))
+    if not expected_terms:
+        meaning_score = 1.0 if decoded_terms else 0.0
+    else:
+        meaning_score = len(expected_terms & decoded_terms) / len(expected_terms)
+    return round((compact_score * 0.4) + (min(1.0, meaning_score) * 0.6), 4)
 
 
 def first_nonempty_line(text: str) -> str:
@@ -1126,15 +1571,26 @@ def escape_backticks(value: str) -> str:
 def strict_markdown_metrics(record: dict[str, Any]) -> str:
     if "human_words_leaked_count" not in record:
         return ""
-    return "\n".join(
-        [
-            f"Human leaks: `{record.get('human_words_leaked_count', 0)}`",
-            f"Leak penalty: `{record.get('human_leak_penalty_total', 0)}`",
-            f"Dictionary token usage: `{record.get('dictionary_token_usage_rate', 0.0)}`",
-            f"Unknown tokens: `{record.get('unknown_token_count', 0)}`",
-            f"Strict compliance: `{record.get('strict_language_compliance_score', 0.0)}`",
-        ]
-    )
+    lines = [
+        f"Human leaks: `{record.get('human_words_leaked_count', 0)}`",
+        f"Leak penalty: `{record.get('human_leak_penalty_total', 0)}`",
+        f"Dictionary token usage: `{record.get('dictionary_token_usage_rate', 0.0)}`",
+        f"Unknown tokens: `{record.get('unknown_token_count', 0)}`",
+        f"Strict compliance: `{record.get('strict_language_compliance_score', 0.0)}`",
+    ]
+    if record.get("speaker") == "Qwen":
+        lines.extend(
+            [
+                f"Qwen decode success: `{record.get('qwen_decode_success', False)}`",
+                f"Qwen decoded meaning: `{record.get('qwen_decode_meaning', '')}`",
+                f"Qwen compact reply: `{record.get('qwen_reply_compact', '')}`",
+                f"Qwen reply leaks: `{record.get('qwen_reply_human_leak_count', 0)}`",
+                f"Qwen receiver score: `{record.get('qwen_receiver_score', 0.0)}`",
+                f"Qwen responder score: `{record.get('qwen_responder_score', 0.0)}`",
+                f"Sender/receiver alignment: `{record.get('sender_receiver_alignment_score', 0.0)}`",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def excerpt(text: str, limit: int = 500) -> str:
