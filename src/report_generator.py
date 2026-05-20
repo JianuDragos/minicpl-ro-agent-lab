@@ -405,6 +405,96 @@ class ReportGenerator:
         ]
         output_path.write_text("\n".join(body) + "\n", encoding="utf-8")
 
+    def write_strict_language_report(
+        self,
+        output_path: Path,
+        debate_result: dict[str, Any],
+    ) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        records = debate_result.get("records", [])
+        tests = debate_result.get("tests", [])
+        phase_id = debate_result.get("phase_id", 6)
+        leaks = [
+            record
+            for record in records
+            if record.get("human_words_leaked_count", 0) > 0
+        ]
+        compact_only = [
+            record
+            for record in records
+            if record.get("human_words_leaked_count", 0) == 0
+        ]
+        evolved = [
+            strict_report_event(record, event)
+            for record in records
+            for event in record.get("evolve_events", [])
+        ]
+        phrase_macros = [
+            strict_report_event(record, event)
+            for record in records
+            for event in record.get("new_events", [])
+            if is_phrase_macro_event(event)
+        ]
+        usage = [
+            record.get("dictionary_token_usage_rate", 0.0)
+            for record in records
+        ]
+        compliance = [
+            record.get("strict_language_compliance_score", 0.0)
+            for record in records
+        ]
+        total_leaks = sum(record.get("human_words_leaked_count", 0) for record in records)
+        total_penalty = sum(record.get("human_leak_penalty_total", 0) for record in records)
+
+        body = [
+            "# MiniCPL-Ro Final Report",
+            "",
+            "## Phase 6 Strict Language Summary",
+            f"- Phase: `{debate_result.get('phase', f'phase{phase_id}_strict_language')}`",
+            f"- Run ID: `{debate_result.get('run_id', '')}`",
+            f"- Model: `{debate_result.get('model', '')}`",
+            f"- Temperature: `{debate_result.get('temperature', '')}`",
+            f"- Strict language mode: `{debate_result.get('strict_language_mode', False)}`",
+            f"- Language map: `{debate_result.get('language_map_path', '')}`",
+            f"- Language map entries: `{debate_result.get('language_map_entry_count', 0)}`",
+            f"- Human leak penalty: `{debate_result.get('human_leak_penalty', 0)}`",
+            f"- Debate messages: `{len(records)}`",
+            f"- Sender/Receiver tests: `{len(tests)}`",
+            f"- Total leaked human words: `{total_leaks}`",
+            f"- Total leak penalty: `{total_penalty}`",
+            f"- Average dictionary token usage: `{safe_mean(usage):.4f}`",
+            f"- Average strict compliance: `{safe_mean(compliance):.4f}`",
+            f"- Strict markdown: `{debate_result.get('markdown_path', '')}`",
+            f"- Strict JSONL: `{debate_result.get('jsonl_path', '')}`",
+            "",
+            "## Human Leakage Violations",
+            strict_leak_table(leaks),
+            "",
+            "## Dictionary Token Usage",
+            strict_usage_table(records),
+            "",
+            "## Best Compact-Only Conversations",
+            strict_compact_only_table(compact_only),
+            "",
+            "## Worst Human-Leak Failures",
+            strict_worst_leak_table(leaks),
+            "",
+            "## Reward Progress After Penalty",
+            strict_reward_progress_table(tests),
+            "",
+            "## Tokens Evolved During Strict Mode",
+            debate_event_table(evolved, event_type="evolve"),
+            "",
+            "## Phrase Macros Created",
+            debate_event_table(phrase_macros, event_type="new"),
+            "",
+            "## Limitations",
+            "- Strict language scoring is surface-based and assumes compact tokens are separated by whitespace.",
+            "- Human text inside `<NEW>`, `<EVOLVE>`, and sender/receiver original or decoded fields is excluded from leak scoring.",
+            "- Sender/Receiver decoding is still rule-based over the current token map.",
+        ]
+        output_path.write_text("\n".join(body) + "\n", encoding="utf-8")
+
 
 def speaker_argument_lines(records: list[dict[str, Any]], limit: int = 10) -> str:
     if not records:
@@ -453,6 +543,14 @@ def debate_event_table(events: list[dict[str, Any]], event_type: str) -> str:
             f"{escape_table(str(event.get('category', '')))} |"
         )
     return "\n".join(lines)
+
+
+def strict_report_event(record: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(event)
+    enriched["round"] = record.get("turn", event.get("round", ""))
+    enriched["source"] = event.get("source") or str(record.get("speaker", "")).lower()
+    enriched["category"] = event.get("category") or record.get("active_vocabulary_category", "")
+    return enriched
 
 
 def sender_receiver_table(
@@ -511,6 +609,112 @@ def debate_language_use_summary(
             f"- NEW events in debate records: `{total_new}`",
             f"- EVOLVE events in debate records: `{total_evolve}`",
         ]
+    )
+
+
+def strict_leak_table(records: list[dict[str, Any]], limit: int = 30) -> str:
+    if not records:
+        return "- No human leakage violations were detected."
+    lines = [
+        "| Turn | Speaker | Leaks | Penalty | Words | Compact Message |",
+        "|---:|---|---:|---:|---|---|",
+    ]
+    for record in sorted(records, key=lambda item: item.get("human_words_leaked_count", 0), reverse=True)[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | {record.get('speaker', '')} | "
+            f"{record.get('human_words_leaked_count', 0)} | "
+            f"{record.get('human_leak_penalty_total', 0)} | "
+            f"{escape_table(', '.join(record.get('human_words_leaked', [])[:12]))} | "
+            f"`{escape_table(str(record.get('compact_message', '')))}` |"
+        )
+    return "\n".join(lines)
+
+
+def strict_usage_table(records: list[dict[str, Any]], limit: int = 40) -> str:
+    if not records:
+        return "- No strict language records were captured."
+    lines = [
+        "| Turn | Speaker | Usage | Unknown | Compliance | Strict Reward |",
+        "|---:|---|---:|---:|---:|---:|",
+    ]
+    for record in records[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | {record.get('speaker', '')} | "
+            f"{record.get('dictionary_token_usage_rate', 0.0)} | "
+            f"{record.get('unknown_token_count', 0)} | "
+            f"{record.get('strict_language_compliance_score', 0.0)} | "
+            f"{record.get('strict_language_reward', 0.0)} |"
+        )
+    return "\n".join(lines)
+
+
+def strict_compact_only_table(records: list[dict[str, Any]], limit: int = 20) -> str:
+    if not records:
+        return "- No compact-only conversations were detected."
+    selected = sorted(
+        records,
+        key=lambda item: (
+            item.get("strict_language_compliance_score", 0.0),
+            item.get("dictionary_token_usage_rate", 0.0),
+        ),
+        reverse=True,
+    )[:limit]
+    lines = [
+        "| Turn | Speaker | Usage | Compliance | Compact Message |",
+        "|---:|---|---:|---:|---|",
+    ]
+    for record in selected:
+        lines.append(
+            f"| {record.get('turn', '')} | {record.get('speaker', '')} | "
+            f"{record.get('dictionary_token_usage_rate', 0.0)} | "
+            f"{record.get('strict_language_compliance_score', 0.0)} | "
+            f"`{escape_table(str(record.get('compact_message', '')))}` |"
+        )
+    return "\n".join(lines)
+
+
+def strict_worst_leak_table(records: list[dict[str, Any]], limit: int = 20) -> str:
+    if not records:
+        return "- No human-leak failures were detected."
+    selected = sorted(
+        records,
+        key=lambda item: (
+            item.get("human_words_leaked_count", 0),
+            item.get("unknown_token_count", 0),
+        ),
+        reverse=True,
+    )[:limit]
+    return strict_leak_table(selected, limit=limit)
+
+
+def strict_reward_progress_table(tests: list[dict[str, Any]]) -> str:
+    if not tests:
+        return "- No reward scores recorded."
+    lines = [
+        "| Turn | Base Reward | Leak Penalty | Final Reward | Ratio | Decode | Compact |",
+        "|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for test in tests:
+        lines.append(
+            f"| {test.get('turn', '')} | "
+            f"{test.get('base_final_reward_score', test.get('final_reward_score', 0.0))} | "
+            f"{test.get('human_leak_penalty_total', 0.0)} | "
+            f"{test.get('final_reward_score', 0.0)} | "
+            f"{test.get('compression_ratio', 0.0)} | "
+            f"{test.get('decode_success_score', 0.0)} | "
+            f"`{escape_table(str(test.get('sender_compact_sentence', '')))}` |"
+        )
+    return "\n".join(lines)
+
+
+def is_phrase_macro_event(event: dict[str, Any]) -> bool:
+    meaning = str(event.get("meaning", ""))
+    category = str(event.get("category", ""))
+    source = str(event.get("source", ""))
+    return (
+        category == "common_phrases"
+        or "phrase" in source.lower()
+        or len(meaning.split()) >= 3
     )
 
 

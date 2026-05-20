@@ -43,8 +43,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--phase-id", type=int, default=5)
     parser.add_argument("--receiver-test", action="store_true")
     parser.add_argument("--reward-mode", action="store_true")
+    parser.add_argument("--strict-language-mode", action="store_true")
+    parser.add_argument("--language-map", type=Path)
+    parser.add_argument("--human-leak-penalty", type=int, default=100)
     parser.add_argument("--show-phase", type=int)
     parser.add_argument("--show-rewards", action="store_true")
+    parser.add_argument("--show-strict-language-report", action="store_true")
     parser.add_argument("--generate-dictionary-2000", action="store_true")
     parser.add_argument("--validate-dictionary-2000", action="store_true")
     parser.add_argument("--generate-dictionary-4000", action="store_true")
@@ -68,6 +72,8 @@ def main() -> int:
         return show_phase(root, args.show_phase)
     if args.show_rewards:
         return show_rewards(root)
+    if args.show_strict_language_report:
+        return show_strict_language_report(root)
     if args.generate_dictionary_2000:
         return generate_dictionary_2000_command(root)
     if args.validate_dictionary_2000:
@@ -97,12 +103,23 @@ def main() -> int:
             reward_mode=args.reward_mode,
             ollama_url=args.ollama_url,
             root=root,
+            strict_language_mode=args.strict_language_mode,
+            language_map_path=args.language_map,
+            human_leak_penalty=args.human_leak_penalty,
         )
         result = arena.run()
-        ReportGenerator().write_debate_report(
-            root / "results" / "final_report.md",
-            debate_result=result,
-        )
+        reporter = ReportGenerator()
+        if args.strict_language_mode:
+            reporter.write_strict_language_report(result["markdown_path"], debate_result=result)
+            reporter.write_strict_language_report(
+                root / "results" / "final_report.md",
+                debate_result=result,
+            )
+        else:
+            reporter.write_debate_report(
+                root / "results" / "final_report.md",
+                debate_result=result,
+            )
         print(f"Run ID: {result['run_id']}")
         print(f"Phase debate JSONL: {result['jsonl_path']}")
         print(f"Phase debate Markdown: {result['markdown_path']}")
@@ -247,11 +264,24 @@ def export_dictionary(root: Path) -> int:
 
 def show_phase(root: Path, phase_id: int) -> int:
     paths = sorted(
-        (root / "results").glob(f"phase{phase_id}_debate_*.md"),
+        list((root / "results").glob(f"phase{phase_id}_debate_*.md"))
+        + list((root / "results").glob(f"phase{phase_id}_strict_language_*.md")),
         key=lambda path: path.stat().st_mtime,
     )
     if not paths:
-        print(f"No phase {phase_id} debate markdown files found.")
+        print(f"No phase {phase_id} markdown files found.")
+        return 1
+    print(paths[-1].read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def show_strict_language_report(root: Path) -> int:
+    paths = sorted(
+        (root / "results").glob("phase*_strict_language_*.md"),
+        key=lambda path: path.stat().st_mtime,
+    )
+    if not paths:
+        print("No strict language markdown files found.")
         return 1
     print(paths[-1].read_text(encoding="utf-8"), end="")
     return 0
@@ -287,7 +317,8 @@ def show_rewards(root: Path) -> int:
 
 def latest_debate_jsonl(root: Path) -> Path | None:
     paths = sorted(
-        (root / "results").glob("phase*_debate_*.jsonl"),
+        list((root / "results").glob("phase*_debate_*.jsonl"))
+        + list((root / "results").glob("phase*_strict_language_*.jsonl")),
         key=lambda path: path.stat().st_mtime,
     )
     return paths[-1] if paths else None
