@@ -35,6 +35,10 @@ class ReportGenerator:
         lexicon_events = protocol_snapshot.get("lexicon_events", [])
         evolution_events = protocol_snapshot.get("token_evolution_events", [])
         deprecated_tokens = protocol_snapshot.get("deprecated_tokens", {})
+        dictionary = dictionary_rows(protocol_snapshot)
+        real_word_dictionary = [row for row in dictionary if row.get("category") != "unmatched"]
+        duplicate_tokens = duplicate_token_rows(dictionary)
+        untokenized = untokenized_vocabulary(protocol_snapshot)
         compact_conversations = sorted(
             protocol_snapshot.get("compact_conversation_examples", []),
             key=lambda item: item.get("continuity_score", 0.0),
@@ -69,6 +73,7 @@ class ReportGenerator:
             f"- Model actually used in final round: `{rounds[-1]['model_used'] if rounds else 'n/a'}`",
             f"- Rounds: `{config['rounds']}`",
             f"- Bootstrap rounds: `{config.get('bootstrap_rounds', 0)}`",
+            f"- Lexicon expansion rounds: `{config.get('lexicon_rounds', 0)}`",
             f"- Temperature: `{config['temperature']}`",
             f"- Ollama URL: `{config['ollama_url']}`",
             f"- Transcript: `{config['transcript_path']}`",
@@ -78,6 +83,9 @@ class ReportGenerator:
             "",
             "## Autonomous Exploration Phase Summary",
             phase_summary(rounds, "autonomous_exploration"),
+            "",
+            "## Lexicon Expansion Phase Summary",
+            phase_summary(rounds, "lexicon_expansion"),
             "",
             "## Compression Results",
             f"- Average compression ratio: `{safe_mean(ratios):.4f}`",
@@ -98,6 +106,30 @@ class ReportGenerator:
             f"- Current token map size: `{len(protocol_snapshot.get('current_token_map', {}))}`",
             f"- Token evolution events: `{len(evolution_events)}`",
             f"- Deprecated token count: `{len(deprecated_tokens)}`",
+            "",
+            "## Vocabulary Coverage",
+            f"- Vocabulary entries total: `{protocol_snapshot.get('vocabulary_entries_total', 0)}`",
+            f"- Vocabulary entries tokenized: `{protocol_snapshot.get('vocabulary_entries_tokenized', 0)}`",
+            f"- Vocabulary coverage ratio: `{protocol_snapshot.get('vocabulary_coverage_ratio', 0.0):.4f}`",
+            f"- Categories covered: `{', '.join(protocol_snapshot.get('categories_covered', [])) or 'none'}`",
+            "",
+            "## Tokens By Category",
+            tokens_by_category_table(real_word_dictionary),
+            "",
+            "## Shortest Tokens",
+            token_table(sorted(real_word_dictionary, key=lambda row: (len(row['token']), row['token']))[:20]),
+            "",
+            "## Longest Tokens",
+            token_table(sorted(real_word_dictionary, key=lambda row: (len(row['token']), row['token']), reverse=True)[:20]),
+            "",
+            "## Duplicate Tokens",
+            duplicate_token_table(duplicate_tokens),
+            "",
+            "## Untokenized Vocabulary",
+            untokenized_vocabulary_section(untokenized),
+            "",
+            "## Real Word Dictionary",
+            token_table(real_word_dictionary[:120]),
             "",
             "## Token Evolution Summary",
             token_evolution_summary(evolution_events),
@@ -247,6 +279,101 @@ class ReportGenerator:
 
 def safe_mean(values: list[float]) -> float:
     return mean(values) if values else 0.0
+
+
+def dictionary_rows(protocol_snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    latest_by_meaning: dict[str, dict[str, Any]] = {}
+    current_token_map = protocol_snapshot.get("current_token_map", {})
+    for event in protocol_snapshot.get("lexicon_events", []):
+        meaning = event.get("meaning", "")
+        if not meaning:
+            continue
+        latest_by_meaning[meaning] = {
+            "meaning": meaning,
+            "token": current_token_map.get(meaning, event.get("token", "")),
+            "round": event.get("round", ""),
+            "phase": event.get("phase", ""),
+            "category": event.get("category", "") or "unmatched",
+            "concept_id": event.get("concept_id", ""),
+        }
+    return sorted(
+        latest_by_meaning.values(),
+        key=lambda row: (row["category"], str(row["meaning"])),
+    )
+
+
+def tokens_by_category_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "- No vocabulary-backed tokens were captured."
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["category"]] = counts.get(row["category"], 0) + 1
+    lines = ["| Category | Tokenized entries |", "|---|---:|"]
+    for category, count in sorted(counts.items()):
+        lines.append(f"| {escape_table(category)} | {count} |")
+    return "\n".join(lines)
+
+
+def token_table(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "- No tokens to show."
+    lines = ["| Meaning | Token | Category | Round | Phase |", "|---|---:|---|---:|---|"]
+    for row in rows:
+        lines.append(
+            f"| {escape_table(str(row.get('meaning', '')))} | `{escape_table(str(row.get('token', '')))}` | "
+            f"{escape_table(str(row.get('category', '')))} | {row.get('round', '')} | {row.get('phase', '')} |"
+        )
+    return "\n".join(lines)
+
+
+def duplicate_token_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_token: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        token = row.get("token", "")
+        if token:
+            by_token.setdefault(token, []).append(row)
+    return {
+        token: token_rows
+        for token, token_rows in by_token.items()
+        if len(token_rows) > 1
+    }
+
+
+def duplicate_token_table(duplicates: dict[str, list[dict[str, Any]]]) -> str:
+    if not duplicates:
+        return "- No duplicate tokens were detected."
+    lines = ["| Token | Meanings |", "|---:|---|"]
+    for token, rows in sorted(duplicates.items(), key=lambda item: item[0]):
+        meanings = ", ".join(escape_table(str(row.get("meaning", ""))) for row in rows)
+        lines.append(f"| `{escape_table(token)}` | {meanings} |")
+    return "\n".join(lines)
+
+
+def untokenized_vocabulary(protocol_snapshot: dict[str, Any]) -> list[dict[str, str]]:
+    tokenized_ids = set(protocol_snapshot.get("tokenized_vocabulary_entries", {}).keys())
+    return [
+        row
+        for row in protocol_snapshot.get("source_vocabulary", [])
+        if row.get("concept_id") not in tokenized_ids
+    ]
+
+
+def untokenized_vocabulary_section(rows: list[dict[str, str]], limit: int = 40) -> str:
+    if not rows:
+        return "- All vocabulary entries have matching token events."
+    lines = [f"- Untokenized entries remaining: `{len(rows)}`", "", "| Category | Romanian | English |", "|---|---|---|"]
+    for row in rows[:limit]:
+        lines.append(
+            f"| {escape_table(row.get('category', ''))} | "
+            f"{escape_table(row.get('ro', ''))} | {escape_table(row.get('en', ''))} |"
+        )
+    if len(rows) > limit:
+        lines.append(f"| ... | ... | {len(rows) - limit} more |")
+    return "\n".join(lines)
+
+
+def escape_table(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
 
 
 def select_fragments(fragments: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

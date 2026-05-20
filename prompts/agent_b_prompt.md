@@ -4,6 +4,12 @@ Round: {round}
 Phase: {phase}
 Current task: {task}
 Seed vocabulary sample: {vocabulary}
+Lexicon expansion batch: {lexicon_batch}
+Lexicon expansion exact batch lines:
+{lexicon_batch_lines}
+Agent A lexicon token targets:
+{lexicon_suggestions}
+Lexicon coverage status: {lexicon_status}
 Protocol snapshot: {protocol}
 
 Phase guidance:
@@ -22,6 +28,7 @@ Important:
 - You may abandon failed ideas, merge protocol families, create sub-languages, or redesign the protocol.
 - You may communicate directly in the compact protocol when useful.
 - After bootstrap, prefer existing compact tokens once they exist.
+- During lexicon_expansion, focus on actual batch vocabulary entries. Copy or improve the Agent A token targets, and emit one exact `<NEW "ro / en" = token>` line for every batch line before any optional notes.
 - If a needed concept is missing, declare it with `<NEW normal_word_or_meaning = compact_token>` and continue using compact protocol.
 - If a shorter or more systematic token replaces an old one, declare it with `<EVOLVE old_token -> new_token reason>` and prefer the new token afterward.
 - Use normal Romanian or English mainly for new concept declarations, short decode hints, or protocol mutation notes.

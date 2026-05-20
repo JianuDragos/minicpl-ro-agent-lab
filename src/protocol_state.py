@@ -26,10 +26,26 @@ class ProtocolState:
     current_token_map: dict[str, str] = field(default_factory=dict)
     deprecated_tokens: dict[str, dict[str, Any]] = field(default_factory=dict)
     compact_conversation_examples: list[dict[str, Any]] = field(default_factory=list)
+    source_vocabulary: list[dict[str, str]] = field(default_factory=list)
+    vocabulary_entries_total: int = 0
+    vocabulary_entries_tokenized: int = 0
+    vocabulary_coverage_ratio: float = 0.0
+    categories_covered: list[str] = field(default_factory=list)
+    tokenized_vocabulary_entries: dict[str, dict[str, Any]] = field(default_factory=dict)
     change_log: list[dict[str, Any]] = field(default_factory=list)
+    _vocabulary_lookup: dict[str, dict[str, str]] = field(default_factory=dict, repr=False)
 
     def known_symbols(self) -> set[str]:
         return set(self.symbol_table.values())
+
+    def configure_vocabulary(self, vocabulary: list[dict[str, str]]) -> None:
+        self.source_vocabulary = [dict(row) for row in vocabulary]
+        self.vocabulary_entries_total = len(self.source_vocabulary)
+        self._vocabulary_lookup = {}
+        for row in self.source_vocabulary:
+            for key in vocabulary_lookup_keys(row):
+                self._vocabulary_lookup[key] = row
+        self._refresh_vocabulary_coverage()
 
     def update_from_round(
         self,
@@ -38,10 +54,15 @@ class ProtocolState:
         architect_notes: str,
         model_response: str,
         metrics: dict[str, Any],
+        agent_a_lexicon_events: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         before = self.known_symbols()
         candidates = extract_symbols(model_response)
-        lexicon_events = parse_new_token_events(model_response)
+        lexicon_events = normalize_seed_events(agent_a_lexicon_events or [])
+        model_lexicon_events = parse_new_token_events(model_response)
+        for event in model_lexicon_events:
+            event["source"] = "agent_b"
+        lexicon_events.extend(model_lexicon_events)
         evolution_events = parse_token_evolution_events(model_response)
 
         new_symbols = sorted(symbol for symbol in candidates if symbol not in before)
@@ -53,6 +74,7 @@ class ProtocolState:
 
         for event in lexicon_events:
             event.update({"round": round_index, "phase": phase})
+            self._annotate_lexicon_event(event)
             self.lexicon_events.append(event)
             self.current_token_map[event["meaning"]] = event["token"]
             self.symbol_table[f"lex_{round_index}_{len(self.lexicon_events)}"] = event["token"]
@@ -70,6 +92,9 @@ class ProtocolState:
                 if token == event["old_token"]:
                     self.current_token_map[meaning] = event["new_token"]
             self.symbol_table[f"evo_{round_index}_{len(self.token_evolution_events)}"] = event["new_token"]
+
+        if lexicon_events or evolution_events:
+            self._refresh_vocabulary_coverage()
 
         compact = metrics.get("compact_phrase", "")
         natural = metrics.get("natural_phrase", "")
@@ -180,8 +205,64 @@ class ProtocolState:
             "current_token_map": self.current_token_map,
             "deprecated_tokens": self.deprecated_tokens,
             "compact_conversation_examples": self.compact_conversation_examples,
+            "source_vocabulary": self.source_vocabulary,
+            "vocabulary_entries_total": self.vocabulary_entries_total,
+            "vocabulary_entries_tokenized": self.vocabulary_entries_tokenized,
+            "vocabulary_coverage_ratio": self.vocabulary_coverage_ratio,
+            "categories_covered": self.categories_covered,
+            "tokenized_vocabulary_entries": self.tokenized_vocabulary_entries,
             "change_log": self.change_log,
         }
+
+    def vocabulary_status(self) -> dict[str, Any]:
+        return {
+            "vocabulary_entries_total": self.vocabulary_entries_total,
+            "vocabulary_entries_tokenized": self.vocabulary_entries_tokenized,
+            "vocabulary_coverage_ratio": self.vocabulary_coverage_ratio,
+            "categories_covered": self.categories_covered,
+        }
+
+    def _annotate_lexicon_event(self, event: dict[str, Any]) -> None:
+        row = self._match_vocabulary_entry(event.get("meaning", ""))
+        if not row:
+            event.setdefault("category", "")
+            event.setdefault("concept_id", "")
+            return
+        event["category"] = row.get("category", "")
+        event["concept_id"] = row.get("concept_id", "")
+        event["ro"] = row.get("ro", "")
+        event["en"] = row.get("en", "")
+
+    def _match_vocabulary_entry(self, meaning: str) -> dict[str, str] | None:
+        normalized = normalize_meaning(meaning)
+        if normalized in self._vocabulary_lookup:
+            return self._vocabulary_lookup[normalized]
+        parts = [normalize_meaning(part) for part in re.split(r"[/|,;]", meaning)]
+        for part in parts:
+            if part in self._vocabulary_lookup:
+                return self._vocabulary_lookup[part]
+        return None
+
+    def _refresh_vocabulary_coverage(self) -> None:
+        tokenized: dict[str, dict[str, Any]] = {}
+        for event in self.lexicon_events:
+            concept_id = event.get("concept_id", "")
+            if concept_id:
+                tokenized[concept_id] = event
+        self.tokenized_vocabulary_entries = tokenized
+        self.vocabulary_entries_tokenized = len(tokenized)
+        self.vocabulary_coverage_ratio = (
+            round(self.vocabulary_entries_tokenized / self.vocabulary_entries_total, 4)
+            if self.vocabulary_entries_total
+            else 0.0
+        )
+        self.categories_covered = sorted(
+            {
+                event.get("category", "")
+                for event in tokenized.values()
+                if event.get("category")
+            }
+        )
 
 
 def extract_symbols(text: str) -> set[str]:
@@ -227,6 +308,28 @@ def parse_new_token_events(text: str) -> list[dict[str, str]]:
     return events
 
 
+def normalize_seed_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for event in events:
+        meaning = str(event.get("meaning", "")).strip()
+        token = str(event.get("token", "")).strip()
+        if not meaning or not token:
+            continue
+        normalized.append(
+            {
+                "meaning": meaning,
+                "token": token,
+                "raw": event.get("raw", f'<NEW "{meaning}" = {token}>'),
+                "source": event.get("source", "agent_a"),
+                "category": event.get("category", ""),
+                "concept_id": event.get("concept_id", ""),
+                "ro": event.get("ro", ""),
+                "en": event.get("en", ""),
+            }
+        )
+    return normalized
+
+
 def parse_token_evolution_events(text: str) -> list[dict[str, str]]:
     events: list[dict[str, str]] = []
     if text.strip().startswith("OLLAMA_ERROR:"):
@@ -255,3 +358,29 @@ def tokens_used_in_text(text: str, tokens: set[str]) -> set[str]:
         if token and token in text:
             used.add(token)
     return used
+
+
+def normalize_meaning(value: str) -> str:
+    cleaned = value.strip().strip("\"'`").lower()
+    cleaned = re.sub(r"\([^)]*\)", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned
+
+
+def vocabulary_lookup_keys(row: dict[str, str]) -> set[str]:
+    ro = row.get("ro", "")
+    en = row.get("en", "")
+    concept_id = row.get("concept_id", "")
+    keys = {
+        normalize_meaning(ro),
+        normalize_meaning(en),
+        normalize_meaning(concept_id),
+        normalize_meaning(f"{ro} / {en}"),
+        normalize_meaning(f"{en} / {ro}"),
+    }
+    if en.lower().startswith("to "):
+        keys.add(normalize_meaning(en[3:]))
+    if "/" in ro or "/" in en:
+        for part in re.split(r"[/|]", f"{ro}/{en}"):
+            keys.add(normalize_meaning(part))
+    return {key for key in keys if key}

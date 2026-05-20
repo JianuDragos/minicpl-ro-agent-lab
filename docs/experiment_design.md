@@ -22,6 +22,18 @@ The bootstrap phase gives Agent A structured pressure:
 
 This phase is meant to start protocol invention without locking the agents into one final format.
 
+### lexicon_expansion
+
+The lexicon expansion phase sits between bootstrap and autonomous exploration. Each round receives a batch of real vocabulary entries from `data/seed_vocabulary.csv` and asks Agent B to create compact tokens for actual Romanian/English concepts:
+
+```text
+<NEW "apă / water" = w>
+<NEW "calculator / computer" = pc>
+<NEW "a vrea / to want" = wn>
+```
+
+This phase exists because fully autonomous runs tend to invent meta-protocol tokens before they cover enough everyday concepts. Lexicon expansion preserves the same `<NEW>` and `<EVOLVE>` event format, but applies it to real seed vocabulary.
+
 ### autonomous_exploration
 
 The autonomous exploration phase gives broader objective-driven prompts. Agent B may decide what to do next inside the language-design goal:
@@ -60,7 +72,7 @@ The arena parses these literal markers and preserves them in protocol state as l
 
 1. Load seed vocabulary from `data/seed_vocabulary.csv`.
 2. Load seed tasks from `data/seed_tasks.json`.
-3. Select `bootstrap` or `autonomous_exploration` from the round number.
+3. Select `bootstrap`, `lexicon_expansion`, or `autonomous_exploration` from the round number.
 4. Build an Agent A pressure instruction using the current protocol state and phase.
 5. Send Agent B a prompt through `http://localhost:11434/api/generate`.
 6. Always include `"think": false` in Ollama requests.
@@ -93,5 +105,9 @@ The arena parses these literal markers and preserves them in protocol state as l
 - Compact protocol continuity score.
 - Token reuse after creation score.
 - Deprecated token reuse count.
+- Vocabulary entries total.
+- Vocabulary entries tokenized.
+- Vocabulary coverage ratio.
+- Categories covered.
 
 These metrics are deliberately approximate. They observe behavior without forcing a single correct protocol.

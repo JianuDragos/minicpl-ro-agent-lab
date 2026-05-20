@@ -4,6 +4,12 @@ Round: {round}
 Phase: {phase}
 Task: {task}
 Available vocabulary categories: {categories}
+Lexicon batch for this round: {lexicon_batch}
+Lexicon batch exact lines:
+{lexicon_batch_lines}
+Agent A lexicon token targets:
+{lexicon_suggestions}
+Lexicon coverage status: {lexicon_status}
 Known protocol snapshot: {known_protocol}
 
 Phase guidance:
@@ -22,6 +28,7 @@ Constraints:
 
 Return whatever prompt is most useful for the current phase.
 During bootstrap, structured pressure is useful.
+During lexicon_expansion, give Agent B the Agent A lexicon token targets and ask it to preserve or improve them. Agent B should output one exact `<NEW "ro / en" = token>` event for every batch line before any optional notes.
 During autonomous_exploration, broad objective-driven prompts are preferred over strict instructions.
 During autonomous_exploration, remind Agent B to reuse existing compact tokens from the protocol state when possible.
 If a needed concept is missing, Agent B may create it with `<NEW normal_word_or_meaning = compact_token>` and continue compactly.

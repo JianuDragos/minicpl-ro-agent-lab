@@ -10,16 +10,16 @@
 ## Run
 
 ```bash
-python3 src/main.py --rounds 30 --bootstrap-rounds 8 --model qwen3.6:35b-a3b --temperature 1.0
+python3 src/main.py --rounds 40 --bootstrap-rounds 5 --lexicon-rounds 15 --model qwen3.6:35b-a3b --temperature 1.0
 ```
 
 For a quick smoke test:
 
 ```bash
-python3 src/main.py --rounds 8 --bootstrap-rounds 4 --model qwen3.6:35b-a3b --temperature 1.0
+python3 src/main.py --rounds 30 --bootstrap-rounds 5 --lexicon-rounds 15 --model qwen3.6:35b-a3b --temperature 1.0
 ```
 
-`--bootstrap-rounds` controls how many initial rounds use structured protocol-invention pressure. Remaining rounds use the `autonomous_exploration` phase.
+`--bootstrap-rounds` controls how many initial rounds use structured protocol-invention pressure. `--lexicon-rounds` controls how many following rounds focus on real vocabulary token creation. Remaining rounds use the `autonomous_exploration` phase.
 
 ## Outputs
 
@@ -40,6 +40,17 @@ Show the latest final report:
 ```bash
 python3 src/main.py --show-latest-report
 ```
+
+Export the latest compact dictionary:
+
+```bash
+python3 src/main.py --export-dictionary
+```
+
+This writes:
+
+- `results/dictionary_latest.csv`
+- `results/dictionary_latest.md`
 
 ## Notes
 
