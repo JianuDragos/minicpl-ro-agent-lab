@@ -11,7 +11,9 @@ from typing import Any
 from agent_arena import AgentArena
 from dictionary_2000 import (
     generate_dictionary_2000,
+    generate_dictionary_4000,
     validate_dictionary_2000,
+    validate_dictionary_4000,
     validation_report,
 )
 from dual_agent_arena import DualAgentArena
@@ -40,6 +42,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--show-rewards", action="store_true")
     parser.add_argument("--generate-dictionary-2000", action="store_true")
     parser.add_argument("--validate-dictionary-2000", action="store_true")
+    parser.add_argument("--generate-dictionary-4000", action="store_true")
+    parser.add_argument("--validate-dictionary-4000", action="store_true")
     return parser.parse_args()
 
 
@@ -60,6 +64,10 @@ def main() -> int:
         return generate_dictionary_2000_command(root)
     if args.validate_dictionary_2000:
         return validate_dictionary_2000_command(root)
+    if args.generate_dictionary_4000:
+        return generate_dictionary_4000_command(root)
+    if args.validate_dictionary_4000:
+        return validate_dictionary_4000_command(root)
 
     if args.dual_agent:
         if not args.debate_mode:
@@ -286,6 +294,28 @@ def generate_dictionary_2000_command(root: Path) -> int:
 def validate_dictionary_2000_command(root: Path) -> int:
     try:
         validation = validate_dictionary_2000(root)
+    except FileNotFoundError as exc:
+        print(str(exc))
+        return 1
+    print(validation_report(validation))
+    return 0 if validation["valid"] else 1
+
+
+def generate_dictionary_4000_command(root: Path) -> int:
+    result = generate_dictionary_4000(root)
+    validation = result["validation"]
+    print(f"Source data: {result['source_path']}")
+    print(f"Dictionary CSV: {result['csv_path']}")
+    print(f"Dictionary JSON: {result['json_path']}")
+    print(f"Dictionary Markdown: {result['markdown_path']}")
+    print("")
+    print(validation_report(validation))
+    return 0 if validation["valid"] else 1
+
+
+def validate_dictionary_4000_command(root: Path) -> int:
+    try:
+        validation = validate_dictionary_4000(root)
     except FileNotFoundError as exc:
         print(str(exc))
         return 1

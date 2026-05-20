@@ -1,4 +1,4 @@
-"""Generate and validate a 2000-entry compact MiniCPL dictionary."""
+"""Generate and validate compact MiniCPL dictionaries."""
 
 from __future__ import annotations
 
@@ -11,10 +11,15 @@ from typing import Any, Iterable
 
 
 TARGET_ENTRY_COUNT = 2000
+TARGET_ENTRY_COUNT_4000 = 4000
 SOURCE_FILENAME = "dictionary_2000_source.csv"
 CSV_FILENAME = "dictionary_2000.csv"
 JSON_FILENAME = "dictionary_2000.json"
 MD_FILENAME = "dictionary_2000.md"
+SOURCE_FILENAME_4000 = "dictionary_4000_source.csv"
+CSV_FILENAME_4000 = "dictionary_4000.csv"
+JSON_FILENAME_4000 = "dictionary_4000.json"
+MD_FILENAME_4000 = "dictionary_4000.md"
 
 ENTRY_FIELDS = [
     "entry_id",
@@ -134,23 +139,57 @@ class DictionaryEntry:
 
 
 def generate_dictionary_2000(root: Path) -> dict[str, Any]:
+    return generate_dictionary(
+        root=root,
+        target_entry_count=TARGET_ENTRY_COUNT,
+        source_filename=SOURCE_FILENAME,
+        csv_filename=CSV_FILENAME,
+        json_filename=JSON_FILENAME,
+        md_filename=MD_FILENAME,
+    )
+
+
+def generate_dictionary_4000(root: Path) -> dict[str, Any]:
+    return generate_dictionary(
+        root=root,
+        target_entry_count=TARGET_ENTRY_COUNT_4000,
+        source_filename=SOURCE_FILENAME_4000,
+        csv_filename=CSV_FILENAME_4000,
+        json_filename=JSON_FILENAME_4000,
+        md_filename=MD_FILENAME_4000,
+    )
+
+
+def generate_dictionary(
+    root: Path,
+    target_entry_count: int,
+    source_filename: str,
+    csv_filename: str,
+    json_filename: str,
+    md_filename: str,
+) -> dict[str, Any]:
     concepts = build_concepts(root)
-    entries = assign_tokens(concepts[:TARGET_ENTRY_COUNT])
+    if len(concepts) < target_entry_count:
+        raise RuntimeError(
+            f"Only {len(concepts)} concepts available; need {target_entry_count}."
+        )
+    selected = concepts[:target_entry_count]
+    entries = assign_tokens(selected)
     data_dir = root / "data"
     results_dir = root / "results"
     data_dir.mkdir(parents=True, exist_ok=True)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    source_path = data_dir / SOURCE_FILENAME
-    csv_path = results_dir / CSV_FILENAME
-    json_path = results_dir / JSON_FILENAME
-    md_path = results_dir / MD_FILENAME
+    source_path = data_dir / source_filename
+    csv_path = results_dir / csv_filename
+    json_path = results_dir / json_filename
+    md_path = results_dir / md_filename
 
-    write_source_csv(source_path, concepts[:TARGET_ENTRY_COUNT])
+    write_source_csv(source_path, selected)
     write_entries_csv(csv_path, entries)
-    write_entries_json(json_path, entries)
-    md_path.write_text(dictionary_markdown(entries), encoding="utf-8")
-    validation = validate_entries(entries)
+    write_entries_json(json_path, entries, target_entry_count)
+    md_path.write_text(dictionary_markdown(entries, target_entry_count), encoding="utf-8")
+    validation = validate_entries(entries, expected_count=target_entry_count)
     return {
         "source_path": source_path,
         "csv_path": csv_path,
@@ -161,9 +200,30 @@ def generate_dictionary_2000(root: Path) -> dict[str, Any]:
 
 
 def validate_dictionary_2000(root: Path) -> dict[str, Any]:
-    csv_path = root / "results" / CSV_FILENAME
+    return validate_dictionary_file(
+        root=root,
+        csv_filename=CSV_FILENAME,
+        expected_count=TARGET_ENTRY_COUNT,
+    )
+
+
+def validate_dictionary_4000(root: Path) -> dict[str, Any]:
+    return validate_dictionary_file(
+        root=root,
+        csv_filename=CSV_FILENAME_4000,
+        expected_count=TARGET_ENTRY_COUNT_4000,
+    )
+
+
+def validate_dictionary_file(
+    root: Path,
+    csv_filename: str,
+    expected_count: int,
+) -> dict[str, Any]:
+    csv_path = root / "results" / csv_filename
     if not csv_path.exists():
-        raise FileNotFoundError(f"{csv_path} does not exist. Run --generate-dictionary-2000 first.")
+        flag = csv_filename.replace(".csv", "").replace("_", "-")
+        raise FileNotFoundError(f"{csv_path} does not exist. Run --generate-{flag} first.")
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         rows = list(csv.DictReader(handle))
     entries = [
@@ -181,7 +241,7 @@ def validate_dictionary_2000(root: Path) -> dict[str, Any]:
         )
         for row in rows
     ]
-    return validate_entries(entries)
+    return validate_entries(entries, expected_count=expected_count)
 
 
 def build_concepts(root: Path) -> list[Concept]:
@@ -203,6 +263,7 @@ def build_concepts(root: Path) -> list[Concept]:
     builder.add_pairs("questions", QUESTION_FORMS, source="curated_question")
     builder.add_pairs("common_phrases", COMMON_PHRASES, source="curated_phrase")
     builder.add_template_entries()
+    builder.add_4000_expansion_entries()
     return builder.concepts
 
 
@@ -326,6 +387,86 @@ class ConceptBuilder:
                     "template_action_software",
                 )
 
+    def add_4000_expansion_entries(self) -> None:
+        pair_groups = [
+            ("daily_conversation", DAILY_CONVERSATION_EXTRA, "curated_daily_4000"),
+            ("emotions", ADVANCED_EMOTIONS, "curated_emotion_4000"),
+            ("adjectives", ADJECTIVES_EXTRA, "curated_adjective_4000"),
+            ("places", PLACES_EXTRA, "curated_place_4000"),
+            ("objects", OBJECTS_EXTRA, "curated_object_4000"),
+            ("school/university words", SCHOOL_UNIVERSITY_TERMS, "curated_school_4000"),
+            ("programming/software terms", PROGRAMMING_EXTRA_TERMS, "curated_programming_4000"),
+            ("AI/LLM terms", AI_LLM_TERMS, "curated_ai_4000"),
+            ("project-management terms", PROJECT_MANAGEMENT_TERMS, "curated_project_4000"),
+            ("cybersecurity/Linux terms", CYBER_LINUX_TERMS, "curated_cyber_linux_4000"),
+            ("grammar/compression markers", GRAMMAR_COMPRESSION_EXTRA, "curated_grammar_4000"),
+        ]
+        for category, pairs, source in pair_groups:
+            self.add_pairs(category, pairs, source=source)
+        self.add_4000_template_entries()
+
+    def add_4000_template_entries(self) -> None:
+        explanation_targets = (
+            SCHOOL_UNIVERSITY_TERMS[:45]
+            + PROGRAMMING_EXTRA_TERMS[:55]
+            + AI_LLM_TERMS[:55]
+            + CYBER_LINUX_TERMS[:55]
+            + PROJECT_MANAGEMENT_TERMS[:45]
+        )
+        for ro, en in explanation_targets:
+            self.add("common_phrases", f"explică {ro}", f"explain {en}", "template_4000_explain")
+            self.add("common_phrases", f"rezumă {ro}", f"summarize {en}", "template_4000_summarize")
+            self.add("questions", f"cum folosesc {ro}?", f"how do I use {en}?", "template_4000_use_question")
+            self.add("requests", f"verifică {ro}", f"check {en}", "template_4000_check")
+
+        project_targets = PROJECT_MANAGEMENT_TERMS[:45] + SOFTWARE_TERMS[:35] + AI_LLM_TERMS[:25]
+        for ro, en in project_targets:
+            self.add(
+                "project-management terms",
+                f"prioritizează {ro}",
+                f"prioritize {en}",
+                "template_4000_prioritize",
+            )
+            self.add(
+                "project-management terms",
+                f"blochează {ro}",
+                f"block {en}",
+                "template_4000_block",
+            )
+            self.add(
+                "project-management terms",
+                f"deblochează {ro}",
+                f"unblock {en}",
+                "template_4000_unblock",
+            )
+
+        cyber_targets = CYBER_LINUX_TERMS[:60] + PROGRAMMING_EXTRA_TERMS[:30]
+        for ro, en in cyber_targets:
+            self.add(
+                "cybersecurity/Linux terms",
+                f"scanează {ro}",
+                f"scan {en}",
+                "template_4000_scan",
+            )
+            self.add(
+                "cybersecurity/Linux terms",
+                f"protejează {ro}",
+                f"protect {en}",
+                "template_4000_protect",
+            )
+            self.add(
+                "cybersecurity/Linux terms",
+                f"permite {ro}",
+                f"allow {en}",
+                "template_4000_allow",
+            )
+
+        school_targets = SCHOOL_UNIVERSITY_TERMS[:50]
+        for ro, en in school_targets:
+            self.add("school/university words", f"învață {ro}", f"learn {en}", "template_4000_learn")
+            self.add("school/university words", f"predă {ro}", f"teach {en}", "template_4000_teach")
+            self.add("school/university words", f"examen la {ro}", f"exam in {en}", "template_4000_exam")
+
     def add(
         self,
         category: str,
@@ -374,9 +515,13 @@ def write_entries_csv(path: Path, entries: list[DictionaryEntry]) -> None:
             writer.writerow({field: getattr(entry, field) for field in ENTRY_FIELDS})
 
 
-def write_entries_json(path: Path, entries: list[DictionaryEntry]) -> None:
+def write_entries_json(
+    path: Path,
+    entries: list[DictionaryEntry],
+    target_entry_count: int,
+) -> None:
     payload = {
-        "name": "MiniCPL-Ro 2000 compact dictionary",
+        "name": f"MiniCPL-Ro {target_entry_count} compact dictionary",
         "entry_count": len(entries),
         "token_policy": {
             "ultra_common": "1 character",
@@ -390,10 +535,10 @@ def write_entries_json(path: Path, entries: list[DictionaryEntry]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def dictionary_markdown(entries: list[DictionaryEntry]) -> str:
-    validation = validate_entries(entries)
+def dictionary_markdown(entries: list[DictionaryEntry], expected_count: int) -> str:
+    validation = validate_entries(entries, expected_count=expected_count)
     lines = [
-        "# MiniCPL-Ro 2000 Compact Dictionary",
+        f"# MiniCPL-Ro {expected_count} Compact Dictionary",
         "",
         f"Entries: `{validation['total_entries']}`",
         f"Average token length: `{validation['average_token_length']}`",
@@ -431,7 +576,10 @@ def dictionary_markdown(entries: list[DictionaryEntry]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def validate_entries(entries: list[DictionaryEntry]) -> dict[str, Any]:
+def validate_entries(
+    entries: list[DictionaryEntry],
+    expected_count: int = TARGET_ENTRY_COUNT,
+) -> dict[str, Any]:
     token_counts: dict[str, int] = {}
     category_counts: dict[str, int] = {}
     missing_tokens: list[dict[str, str]] = []
@@ -466,9 +614,9 @@ def validate_entries(entries: list[DictionaryEntry]) -> dict[str, Any]:
         "human_language_like_token_count": len(human_like),
         "entries_without_compact_tokens": missing_tokens,
         "entries_without_compact_tokens_count": len(missing_tokens),
+        "expected_entries": expected_count,
         "valid": (
-            len(entries) >= 1900
-            and len(entries) <= 2100
+            len(entries) == expected_count
             and not duplicates
             and not missing_tokens
             and max_token_length <= TOKEN_MAX_LENGTH
@@ -1212,4 +1360,483 @@ COMMON_PHRASES = [
     ("arată rezultatul", "show the result"),
     ("trimite mesajul", "send the message"),
     ("primește răspunsul", "receive the answer"),
+]
+
+DAILY_CONVERSATION_EXTRA = [
+    ("bună ziua", "good day"),
+    ("ne auzim mai târziu", "talk later"),
+    ("revin imediat", "I will be right back"),
+    ("am o întrebare", "I have a question"),
+    ("nu sunt sigur", "I am not sure"),
+    ("ai dreptate", "you are right"),
+    ("nu contează", "never mind"),
+    ("se poate", "it is possible"),
+    ("nu se poate", "it is not possible"),
+    ("am terminat", "I finished"),
+    ("mai încerc", "I will try again"),
+    ("trimite-mi detalii", "send me details"),
+    ("spune-mi pașii", "tell me the steps"),
+    ("arată exemplul", "show the example"),
+    ("fără grabă", "no rush"),
+    ("este urgent", "it is urgent"),
+    ("sunt disponibil", "I am available"),
+    ("nu sunt disponibil", "I am not available"),
+    ("am uitat", "I forgot"),
+    ("îmi amintesc", "I remember"),
+    ("nu am timp", "I have no time"),
+    ("am timp", "I have time"),
+    ("este clar", "it is clear"),
+    ("nu este clar", "it is not clear"),
+    ("hai să continuăm", "let us continue"),
+    ("hai să oprim", "let us stop"),
+    ("confirm primirea", "confirm receipt"),
+    ("aștept răspunsul", "I await the response"),
+    ("verific acum", "checking now"),
+    ("am verificat", "I checked"),
+]
+
+ADVANCED_EMOTIONS = [
+    ("încrezător", "confident"),
+    ("rușinat", "ashamed"),
+    ("recunoscător", "grateful"),
+    ("dezamăgit", "disappointed"),
+    ("încântat", "delighted"),
+    ("speriat", "afraid"),
+    ("frustrat", "frustrated"),
+    ("nerăbdător", "impatient"),
+    ("răbdător", "patient"),
+    ("hotărât", "determined"),
+    ("ezitant", "hesitant"),
+    ("sceptic", "skeptical"),
+    ("încurajat", "encouraged"),
+    ("descurajat", "discouraged"),
+    ("ușurat", "relieved"),
+    ("tensionat", "tense"),
+    ("sigur pe sine", "self assured"),
+    ("copleșit", "overwhelmed"),
+    ("inspirat", "inspired"),
+    ("epuizat", "exhausted"),
+    ("neliniștit", "uneasy"),
+    ("mulțumit de rezultat", "happy with result"),
+    ("nemulțumit de rezultat", "unhappy with result"),
+    ("dornic să învăț", "eager to learn"),
+    ("prudent", "cautious"),
+]
+
+ADJECTIVES_EXTRA = [
+    ("mic", "small"),
+    ("mare", "large"),
+    ("scurt", "short"),
+    ("lung", "long"),
+    ("nou", "new"),
+    ("vechi", "old"),
+    ("rapid", "quick"),
+    ("încet", "slow"),
+    ("simplu", "simple"),
+    ("complex", "complex"),
+    ("clar", "clear"),
+    ("neclar", "unclear"),
+    ("sigur", "safe"),
+    ("nesigur", "unsafe"),
+    ("util", "useful"),
+    ("inutil", "useless"),
+    ("corect", "correct"),
+    ("incorect", "incorrect"),
+    ("complet", "complete"),
+    ("incomplet", "incomplete"),
+    ("stabil", "stable"),
+    ("instabil", "unstable"),
+    ("ieftin", "cheap"),
+    ("scump", "expensive"),
+    ("ușor", "easy"),
+    ("greu", "hard"),
+    ("vizibil", "visible"),
+    ("ascuns", "hidden"),
+    ("activ", "active"),
+    ("inactiv", "inactive"),
+    ("public", "public"),
+    ("privat", "private"),
+    ("automat", "automatic"),
+    ("manual", "manual"),
+    ("sincron", "synchronous"),
+    ("asincron", "asynchronous"),
+    ("local", "local"),
+    ("global", "global"),
+    ("temporar", "temporary"),
+    ("permanent", "permanent"),
+    ("critic", "critical"),
+    ("opțional", "optional"),
+    ("obligatoriu", "required"),
+    ("valid", "valid"),
+    ("invalid", "invalid"),
+    ("compact", "compact"),
+    ("redundant", "redundant"),
+    ("ambiguu", "ambiguous"),
+    ("precis", "precise"),
+    ("aproximativ", "approximate"),
+]
+
+PLACES_EXTRA = [
+    ("sală de clasă", "classroom"),
+    ("laborator", "laboratory"),
+    ("bibliotecă", "library"),
+    ("campus", "campus"),
+    ("amfiteatru", "lecture hall"),
+    ("secretariat", "administration office"),
+    ("cantină", "cafeteria"),
+    ("cămin", "dormitory"),
+    ("sală de ședințe", "meeting room"),
+    ("centru de date", "data center"),
+    ("mașină virtuală", "virtual machine"),
+    ("container", "container"),
+    ("nod", "node"),
+    ("cluster", "cluster"),
+    ("depozit de cod", "code repository"),
+    ("registru", "registry"),
+    ("canal", "channel"),
+    ("spațiu de nume", "namespace"),
+    ("mediu de test", "test environment"),
+    ("mediu de producție", "production environment"),
+    ("zonă sigură", "safe zone"),
+    ("zonă izolată", "isolated zone"),
+    ("subrețea", "subnet"),
+    ("gateway", "gateway"),
+    ("punct final", "endpoint"),
+]
+
+OBJECTS_EXTRA = [
+    ("caiet", "notebook"),
+    ("manual", "textbook"),
+    ("marker", "marker"),
+    ("tablă", "board"),
+    ("proiector", "projector"),
+    ("rucsac", "backpack"),
+    ("formular de înscriere", "enrollment form"),
+    ("legitimație", "identity card"),
+    ("certificat", "certificate"),
+    ("diplomă", "diploma"),
+    ("grafic", "chart"),
+    ("diagramă", "diagram"),
+    ("matrice", "matrix"),
+    ("vector", "vector"),
+    ("set de date", "dataset"),
+    ("model de date", "data model"),
+    ("cheie api", "api key"),
+    ("token de acces", "access token"),
+    ("parolă temporară", "temporary password"),
+    ("copie de rezervă", "backup"),
+    ("arhivă", "archive"),
+    ("imprimantă", "printer"),
+    ("router", "router"),
+    ("comutator de rețea", "network switch"),
+    ("senzor", "sensor"),
+    ("jurnal de sistem", "system log"),
+    ("fișier de configurare", "configuration file"),
+    ("imagine container", "container image"),
+    ("cheie ssh", "ssh key"),
+    ("certificat tls", "tls certificate"),
+]
+
+SCHOOL_UNIVERSITY_TERMS = [
+    ("lecție", "lesson"),
+    ("curs", "course"),
+    ("seminar", "seminar"),
+    ("laborator didactic", "teaching lab"),
+    ("temă", "homework"),
+    ("proiect de curs", "course project"),
+    ("examen", "exam"),
+    ("test grilă", "quiz"),
+    ("notă", "grade"),
+    ("credit", "credit"),
+    ("profesor universitar", "professor"),
+    ("asistent universitar", "teaching assistant"),
+    ("student masterand", "graduate student"),
+    ("student doctorand", "doctoral student"),
+    ("programă", "syllabus"),
+    ("bibliografie", "bibliography"),
+    ("lucrare", "paper"),
+    ("teză", "thesis"),
+    ("disertație", "dissertation"),
+    ("prezentare", "presentation"),
+    ("absență", "absence"),
+    ("prezență", "attendance"),
+    ("orar", "timetable"),
+    ("sesiune", "exam session"),
+    ("admitere", "admission"),
+    ("înscriere", "enrollment"),
+    ("bursă", "scholarship"),
+    ("facultate", "faculty"),
+    ("departament", "department"),
+    ("disciplină", "subject"),
+    ("matematică", "mathematics"),
+    ("informatică", "computer science"),
+    ("fizică", "physics"),
+    ("chimie", "chemistry"),
+    ("biologie", "biology"),
+    ("istorie", "history"),
+    ("lingvistică", "linguistics"),
+    ("logică", "logic"),
+    ("statistică", "statistics"),
+    ("algoritmi", "algorithms"),
+    ("structuri de date", "data structures"),
+    ("baze de date", "databases"),
+    ("sisteme de operare", "operating systems"),
+    ("rețele de calculatoare", "computer networks"),
+    ("inginerie software", "software engineering"),
+    ("inteligență artificială", "artificial intelligence"),
+    ("învățare automată", "machine learning"),
+    ("etică academică", "academic ethics"),
+    ("plagiat", "plagiarism"),
+    ("recenzie academică", "academic review"),
+]
+
+PROGRAMMING_EXTRA_TERMS = [
+    ("tip de date", "data type"),
+    ("operator", "operator"),
+    ("expresie", "expression"),
+    ("instrucțiune", "statement"),
+    ("buclă", "loop"),
+    ("condiție", "condition"),
+    ("apel de funcție", "function call"),
+    ("parametru", "parameter"),
+    ("valoare returnată", "return value"),
+    ("stivă de apeluri", "call stack"),
+    ("heap", "heap"),
+    ("pointer", "pointer"),
+    ("referință", "reference"),
+    ("interfață api", "api interface"),
+    ("endpoint api", "api endpoint"),
+    ("serializare", "serialization"),
+    ("deserializare", "deserialization"),
+    ("parser", "parser"),
+    ("compilator", "compiler"),
+    ("interpretor", "interpreter"),
+    ("runtime", "runtime"),
+    ("thread pool", "thread pool"),
+    ("blocare", "lock"),
+    ("semafor", "semaphore"),
+    ("tranzacție", "transaction"),
+    ("migrare", "migration"),
+    ("indexare", "indexing"),
+    ("interogare", "query"),
+    ("schemă json", "json schema"),
+    ("test unitar", "unit test"),
+    ("test de integrare", "integration test"),
+    ("test end-to-end", "end to end test"),
+    ("acoperire de test", "test coverage"),
+    ("stub", "stub"),
+    ("mock", "mock"),
+    ("fixture", "fixture"),
+    ("lint", "lint"),
+    ("formatter", "formatter"),
+    ("refactorizare", "refactor"),
+    ("regresie", "regression"),
+    ("ramură principală", "main branch"),
+    ("etichetă git", "git tag"),
+    ("conflict de merge", "merge conflict"),
+    ("pipeline ci", "ci pipeline"),
+    ("artefact build", "build artifact"),
+    ("variabilă de mediu", "environment variable"),
+    ("secret", "secret"),
+    ("containerizare", "containerization"),
+    ("orchestrare", "orchestration"),
+    ("observabilitate", "observability"),
+    ("telemetrie", "telemetry"),
+    ("trasare", "tracing"),
+    ("metrici de sistem", "system metrics"),
+    ("alertă", "alert"),
+    ("incident", "incident"),
+]
+
+AI_LLM_TERMS = [
+    ("model lingvistic mare", "large language model"),
+    ("fereastră de context", "context window"),
+    ("tokenizare", "tokenization"),
+    ("token de intrare", "input token"),
+    ("token de ieșire", "output token"),
+    ("prompt de sistem", "system prompt"),
+    ("prompt de utilizator", "user prompt"),
+    ("mesaj asistent", "assistant message"),
+    ("raționament", "reasoning"),
+    ("temperatură model", "model temperature"),
+    ("top p", "top p"),
+    ("eșantionare", "sampling"),
+    ("halucinație", "hallucination"),
+    ("ancorare", "grounding"),
+    ("recuperare de informații", "retrieval"),
+    ("rag", "retrieval augmented generation"),
+    ("embedding", "embedding"),
+    ("spațiu vectorial", "vector space"),
+    ("bază vectorială", "vector database"),
+    ("similaritate cosinus", "cosine similarity"),
+    ("reranker", "reranker"),
+    ("clasificator", "classifier"),
+    ("etichetare automată", "automatic labeling"),
+    ("rezumat automat", "automatic summary"),
+    ("agent autonom", "autonomous agent"),
+    ("planificator", "planner"),
+    ("apel de instrument", "tool call"),
+    ("schemă de instrument", "tool schema"),
+    ("ieșire structurată", "structured output"),
+    ("evaluare model", "model evaluation"),
+    ("set de evaluare", "evaluation set"),
+    ("scor de calitate", "quality score"),
+    ("alucinație detectată", "detected hallucination"),
+    ("politică de siguranță", "safety policy"),
+    ("filtru de conținut", "content filter"),
+    ("aliniere", "alignment"),
+    ("reglaj fin", "fine tuning"),
+    ("distilare", "distillation"),
+    ("inferență", "inference"),
+    ("latență de inferență", "inference latency"),
+    ("cost pe token", "cost per token"),
+    ("memorie de conversație", "conversation memory"),
+    ("lanț de prompturi", "prompt chain"),
+    ("exemplu few-shot", "few shot example"),
+    ("zero-shot", "zero shot"),
+    ("funcție de recompensă", "reward function"),
+    ("agent evaluator", "evaluator agent"),
+    ("decodor semantic", "semantic decoder"),
+    ("compresie semantică", "semantic compression"),
+    ("protocol emergent", "emergent protocol"),
+]
+
+PROJECT_MANAGEMENT_TERMS = [
+    ("obiectiv", "objective"),
+    ("jalon", "milestone"),
+    ("livrabil", "deliverable"),
+    ("sarcină blocată", "blocked task"),
+    ("dependință de proiect", "project dependency"),
+    ("risc", "risk"),
+    ("mitigare", "mitigation"),
+    ("prioritate", "priority"),
+    ("estimare", "estimate"),
+    ("efort", "effort"),
+    ("termen", "due date"),
+    ("proprietar", "owner"),
+    ("responsabil", "responsible person"),
+    ("parte interesată", "stakeholder"),
+    ("cerință", "requirement"),
+    ("criteriu de acceptare", "acceptance criterion"),
+    ("roadmap", "roadmap"),
+    ("sprint", "sprint"),
+    ("backlog", "backlog"),
+    ("ticket", "ticket"),
+    ("epic", "epic"),
+    ("poveste utilizator", "user story"),
+    ("ședință zilnică", "daily standup"),
+    ("retro", "retrospective"),
+    ("revizuire sprint", "sprint review"),
+    ("notă de decizie", "decision note"),
+    ("schimbare de scop", "scope change"),
+    ("blocaj", "blocker"),
+    ("raport de stare", "status report"),
+    ("indicator cheie", "key indicator"),
+    ("capacitate", "capacity"),
+    ("alocare", "allocation"),
+    ("calendar proiect", "project calendar"),
+    ("flux de lucru", "workflow"),
+    ("aprobare", "approval"),
+    ("escaladare", "escalation"),
+    ("lecție învățată", "lesson learned"),
+    ("ipoteză", "assumption"),
+    ("constrângere", "constraint"),
+    ("decizie deschisă", "open decision"),
+    ("problemă deschisă", "open issue"),
+    ("următorul pas", "next step"),
+    ("plan de lansare", "release plan"),
+    ("notă de lansare", "release note"),
+    ("criteriu de succes", "success criterion"),
+]
+
+CYBER_LINUX_TERMS = [
+    ("utilizator linux", "linux user"),
+    ("grup linux", "linux group"),
+    ("permisiuni fișier", "file permissions"),
+    ("proprietar fișier", "file owner"),
+    ("shell", "shell"),
+    ("bash", "bash"),
+    ("proces linux", "linux process"),
+    ("daemon", "daemon"),
+    ("serviciu systemd", "systemd service"),
+    ("jurnal systemd", "systemd journal"),
+    ("cale absolută", "absolute path"),
+    ("cale relativă", "relative path"),
+    ("director home", "home directory"),
+    ("director temporar", "temporary directory"),
+    ("link simbolic", "symbolic link"),
+    ("pachet deb", "deb package"),
+    ("manager de pachete", "package manager"),
+    ("actualizare sistem", "system update"),
+    ("port", "port"),
+    ("socket", "socket"),
+    ("firewall", "firewall"),
+    ("regulă firewall", "firewall rule"),
+    ("adresă ip", "ip address"),
+    ("dns", "dns"),
+    ("tls", "tls"),
+    ("cheie publică", "public key"),
+    ("cheie privată", "private key"),
+    ("hash", "hash"),
+    ("semnătură", "signature"),
+    ("criptare", "encryption"),
+    ("decriptare", "decryption"),
+    ("vulnerabilitate", "vulnerability"),
+    ("exploit", "exploit"),
+    ("patch de securitate", "security patch"),
+    ("scanare porturi", "port scan"),
+    ("autentificare", "authentication"),
+    ("autorizare", "authorization"),
+    ("sesiune", "session"),
+    ("cookie", "cookie"),
+    ("csrf", "csrf"),
+    ("xss", "xss"),
+    ("injecție sql", "sql injection"),
+    ("forță brută", "brute force"),
+    ("rată limitată", "rate limit"),
+    ("listă de control acces", "access control list"),
+    ("principiu minim privilegiu", "least privilege"),
+    ("audit", "audit"),
+    ("log de securitate", "security log"),
+    ("incident de securitate", "security incident"),
+    ("copie sigură", "secure copy"),
+    ("tunel ssh", "ssh tunnel"),
+    ("container linux", "linux container"),
+    ("capabilitate linux", "linux capability"),
+    ("spațiu de nume linux", "linux namespace"),
+    ("cgroup", "cgroup"),
+    ("montare", "mount"),
+]
+
+GRAMMAR_COMPRESSION_EXTRA = [
+    ("separator de câmp", "field separator"),
+    ("separator de listă", "list separator"),
+    ("marcator de început", "start marker"),
+    ("marcator de sfârșit", "end marker"),
+    ("marcator de rol", "role marker"),
+    ("marcator de timp", "time marker"),
+    ("marcator de loc", "location marker"),
+    ("marcator de scop", "purpose marker"),
+    ("marcator de cauză", "cause marker"),
+    ("marcator de stare", "state marker"),
+    ("marcator de eroare", "error marker"),
+    ("marcator de confirmare", "confirmation marker"),
+    ("marcator de ambiguitate", "ambiguity marker"),
+    ("marcator de compunere", "composition marker"),
+    ("marcator de comprimare", "compression marker"),
+    ("marcator de decomprimare", "decompression marker"),
+    ("cod de categorie", "category code"),
+    ("cod de domeniu", "domain code"),
+    ("cod de relație", "relation code"),
+    ("cod de acțiune", "action code"),
+    ("cod de entitate", "entity code"),
+    ("cod de proprietate", "property code"),
+    ("cod de valoare", "value code"),
+    ("cod de întrebare", "question code"),
+    ("cod de negare", "negation code"),
+    ("cod de plural", "plural code"),
+    ("regulă de scurtare", "shortening rule"),
+    ("regulă de reutilizare", "reuse rule"),
+    ("regulă de evitare duplicat", "duplicate avoidance rule"),
+    ("regulă de evoluție token", "token evolution rule"),
 ]
