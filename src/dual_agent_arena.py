@@ -50,6 +50,11 @@ HUMAN_WORD_RE = re.compile(r"[A-Za-zăâîșțĂÂÎȘȚ]+", re.UNICODE)
 NEW_OR_EVOLVE_RE = re.compile(r"<(?:NEW|EVOLVE)\b[^>]*>", re.IGNORECASE | re.DOTALL)
 FIELD_TAG_RE = re.compile(r"<(?:SEND|RECV|DECODE|REPLY)\b[^>]*>", re.IGNORECASE | re.DOTALL)
 COMPACT_ATTR_RE = re.compile(r'\bcompact="([^"]*)"', re.IGNORECASE)
+COMPACT_BLOCK_RE = re.compile(
+    r"<COMPACT\b[^>]*>(?P<compact>.*?)</COMPACT>",
+    re.IGNORECASE | re.DOTALL,
+)
+NOTE_BLOCK_RE = re.compile(r"<NOTE\b[^>]*>.*?</NOTE>", re.IGNORECASE | re.DOTALL)
 DECODE_TAG_RE = re.compile(r"<DECODE\b([^>]*)>", re.IGNORECASE | re.DOTALL)
 REPLY_TAG_RE = re.compile(r"<REPLY\b([^>]*)>", re.IGNORECASE | re.DOTALL)
 REPLY_COMPACT_TAG_RE = re.compile(
@@ -135,6 +140,8 @@ class DualAgentArena:
         state_path = results_dir / f"protocol_state_{output_prefix}_{run_id}.json"
         codex_output_dir = results_dir / "codex_messages" / run_id
         codex_output_dir.mkdir(parents=True, exist_ok=True)
+        qwen_prompt_dir = results_dir / "qwen_prompts" / run_id
+        qwen_prompt_dir.mkdir(parents=True, exist_ok=True)
 
         records: list[dict[str, Any]] = []
         tests: list[dict[str, Any]] = []
@@ -195,12 +202,31 @@ class DualAgentArena:
                     if codex_result.ok
                     else f"CODEX_ERROR: {codex_result.error or codex_result.stderr}"
                 )
+                codex_sender_metrics = {}
+                codex_retry_count = 0
+                codex_initial_response = codex_response
+                if self.strict_language_mode:
+                    codex_response, codex_result, codex_sender_metrics, codex_retry_count = (
+                        self._finalize_codex_sender_response(
+                            initial_response=codex_response,
+                            initial_result=codex_result,
+                            context=codex_prompt,
+                            category=category,
+                            turn=turn,
+                            output_path=codex_output_path,
+                        )
+                    )
                 codex_update = self._apply_agent_message(
                     speaker="Codex",
                     response=codex_response,
                     turn=turn,
                     category=category,
                     context=context,
+                    extra_metrics={
+                        **codex_sender_metrics,
+                        "codex_retry_count": codex_retry_count,
+                        "codex_initial_response": codex_initial_response,
+                    } if self.strict_language_mode else None,
                 )
                 codex_compact_input = strict_compact_message(codex_response)
 
@@ -213,6 +239,8 @@ class DualAgentArena:
                     context=context,
                     last_message=codex_response,
                 )
+                qwen_prompt_path = qwen_prompt_dir / f"qwen_turn_{turn:03d}.txt"
+                qwen_prompt_path.write_text(qwen_prompt, encoding="utf-8")
                 qwen_result = self.ollama.generate(
                     qwen_prompt,
                     model=self.model,
@@ -248,6 +276,7 @@ class DualAgentArena:
                         **qwen_receiver_metrics,
                         "qwen_retry_count": qwen_retry_count,
                         "qwen_initial_response": qwen_initial_response,
+                        "qwen_prompt_path": str(qwen_prompt_path),
                     } if self.strict_language_mode else None,
                 )
 
@@ -440,6 +469,10 @@ class DualAgentArena:
         if self.strict_language_mode:
             strict_metrics = strict_record_metrics(update["metrics"])
             record.update(strict_metrics)
+            if speaker == "Codex":
+                record.update(codex_sender_record_metrics(update["metrics"]))
+                if record.get("codex_compact_message_extracted"):
+                    record["compact_message"] = record["codex_compact_message_extracted"]
             if speaker == "Qwen":
                 record.update(qwen_receiver_record_metrics(update["metrics"], response))
                 if record.get("qwen_reply_compact"):
@@ -676,17 +709,23 @@ Required language base: {self.language_map_path}
 Human leak penalty: -{self.human_leak_penalty} per leaked human word.
 
 Hard rules:
-- Put a compact-language message first.
-- Compact messages must primarily use compact_token values from the 4000-entry language map.
+- You are Agent A / Sender.
+- Output this structure, with <COMPACT> first:
+  <COMPACT>compact tokens only here</COMPACT>
+  <NEW human_meaning = compact_token> optional
+  <EVOLVE old_token -> new_token reason> optional
+  <NOTE>one short note if needed</NOTE>
+- The <COMPACT> field is the only sender message Qwen must decode.
+- The <COMPACT> field must use compact_token values from the 4000-entry language map or tokens declared with valid <NEW>/<EVOLVE> markers.
 - Separate compact tokens with spaces so the observer can score token use.
-- Do not write normal English or Romanian in compact messages.
-- Human language is allowed only inside original/source sentence fields, receiver decoded output fields, <NEW human_meaning = compact_token>, and <EVOLVE old_token -> new_token reason>.
+- Do not write normal English or Romanian inside <COMPACT>.
+- Human language is allowed only inside original/source sentence fields, receiver decoded output fields, <NEW human_meaning = compact_token>, <EVOLVE old_token -> new_token reason>, and <NOTE>.
 - If a needed meaning is missing, create it with <NEW human_meaning = compact_token>.
 - Use real one-line NEW declarations such as <NEW pe mine / me accusative = pA1>. Do not output placeholder text such as <NEW human_meaning = compact_token>.
 - If a token is inefficient, evolve it with <EVOLVE old_token -> new_token reason>.
 - Phrase macros are allowed with <NEW human_phrase = compact_token>, then use the compact token afterward.
 - Keep decode ability: use <SEND original="..." compact="..."> and <RECV compact="..." decoded="..."> only when useful.
-- Outside allowed event fields, avoid prose. Prefer compact tokens only.
+- Keep all human explanation outside <COMPACT>.
 
 Active category: {category}
 Turn: {turn}
@@ -738,10 +777,13 @@ Hard rules:
 - The DECODE meaning field may contain Romanian/English.
 - The REPLY compact field must contain only compact tokens from the language map, newly declared compact tokens, or STRICT_FAIL_NO_TOKEN when decoding fails.
 - Do not write normal English or Romanian outside the DECODE meaning field or <NEW human_meaning = compact_token>.
+- Do not output <COMPACT>, <ANSWER>, <NOTE>, ACK, OK, yes, no, or explanatory prose.
+- Never put a <NEW> marker inside REPLY compact. If you need <NEW>, write it on its own line before REPLY.
 - Every human word inside REPLY compact receives -{self.human_leak_penalty}.
 - If you cannot decode the input, output exactly:
   <DECODE compact="{escape_attr(compact_input)}" meaning="UNKNOWN">
   <REPLY compact="STRICT_FAIL_NO_TOKEN">
+- If you are unsure how to reply compactly, use <REPLY compact="STRICT_FAIL_NO_TOKEN">.
 - If a needed concept is missing, create it with <NEW human_meaning = compact_token>, then continue compactly in REPLY.
 - Use real one-line NEW declarations such as <NEW pe mine / me accusative = pA1>. Do not output placeholder text such as <NEW human_meaning = compact_token>.
 - Separate compact tokens with spaces.
@@ -1001,6 +1043,191 @@ Full Codex message:
             "strict_language_reward": -leak_penalty_total,
         }
 
+    def _strict_compact_field_metrics(
+        self,
+        compact: str,
+        response: str,
+    ) -> dict[str, Any]:
+        allowed_tokens = (
+            self.language_token_set
+            | set(self.protocol.current_token_map.values())
+            | strict_declared_tokens(response)
+            | STRICT_ALLOWED_CONTROL_TOKENS
+        )
+        scored_compact = NEW_OR_EVOLVE_RE.sub(" ", compact)
+        atoms = strict_atoms(scored_compact)
+        known_atoms = [atom for atom in atoms if atom in allowed_tokens]
+        unknown_atoms = [atom for atom in atoms if atom not in allowed_tokens]
+        human_leaks = human_words_from_unknown_atoms(unknown_atoms)
+        total_atoms = len(known_atoms) + len(unknown_atoms)
+        usage_rate = round(len(known_atoms) / total_atoms, 4) if total_atoms else 0.0
+        leak_penalty_total = len(human_leaks) * self.human_leak_penalty
+        leak_factor = max(0.0, 1.0 - (len(human_leaks) / max(1, total_atoms)))
+        compact_only_score = round(usage_rate * leak_factor, 4)
+        return {
+            "compact": compact,
+            "known_atoms": known_atoms,
+            "unknown_atoms": unknown_atoms,
+            "human_leaks": human_leaks,
+            "usage_rate": usage_rate,
+            "leak_penalty_total": leak_penalty_total,
+            "compact_only_score": compact_only_score,
+        }
+
+    def _codex_sender_metrics(self, response: str) -> dict[str, Any]:
+        compact = compact_block_text(response)
+        compact_field_present = bool(compact)
+        if not compact:
+            compact = strict_compact_message(response)
+        field_metrics = self._strict_compact_field_metrics(compact, response)
+        human_leaks = field_metrics["human_leaks"][:50]
+        unknown_atoms = field_metrics["unknown_atoms"][:50]
+        known_atoms = field_metrics["known_atoms"]
+        leak_count = len(field_metrics["human_leaks"])
+        penalty = field_metrics["leak_penalty_total"]
+        usage_rate = field_metrics["usage_rate"]
+        compact_only_score = field_metrics["compact_only_score"]
+        return {
+            "codex_compact_field_present": compact_field_present,
+            "codex_compact_message_extracted": compact,
+            "codex_compact_human_leak_count": leak_count,
+            "codex_compact_human_leaks": human_leaks,
+            "codex_compact_unknown_token_count": len(field_metrics["unknown_atoms"]),
+            "codex_compact_unknown_tokens": unknown_atoms,
+            "codex_compact_dictionary_tokens_used_count": len(known_atoms),
+            "codex_dictionary_token_usage_rate": usage_rate,
+            "codex_compact_only_score": compact_only_score,
+            "codex_compact_leak_penalty": penalty,
+            "human_words_leaked_count": leak_count,
+            "human_words_leaked": human_leaks,
+            "human_leak_penalty_total": penalty,
+            "dictionary_token_usage_rate": usage_rate,
+            "dictionary_tokens_used_count": len(known_atoms),
+            "unknown_token_count": len(field_metrics["unknown_atoms"]),
+            "unknown_tokens": unknown_atoms,
+            "strict_language_compliance_score": compact_only_score,
+            "strict_language_reward": -penalty,
+            "compact_phrase": compact,
+        }
+
+    def _finalize_codex_sender_response(
+        self,
+        initial_response: str,
+        initial_result: CodexResult,
+        context: str,
+        category: str,
+        turn: int,
+        output_path: Path,
+    ) -> tuple[str, CodexResult, dict[str, Any], int]:
+        response = initial_response
+        result = initial_result
+        initial_metrics = self._codex_sender_metrics(response)
+        metrics = dict(initial_metrics)
+        retry_count = 0
+        while (
+            self.strict_retry_on_leak
+            and retry_count < self.strict_max_retries
+            and self._codex_retry_needed(metrics)
+        ):
+            retry_count += 1
+            retry_prompt = self._build_codex_retry_prompt(
+                compact_message=metrics.get("codex_compact_message_extracted", ""),
+                compact_human_leaks=metrics.get("codex_compact_human_leaks", []),
+                compact_field_present=metrics.get("codex_compact_field_present", False),
+                previous_response=response,
+                context=context,
+                category=category,
+                turn=turn,
+            )
+            retry_output_path = output_path.with_name(
+                f"{output_path.stem}_retry_{retry_count:03d}{output_path.suffix}"
+            )
+            retry_result = self.codex.exec(retry_prompt, retry_output_path)
+            retry_response = (
+                retry_result.response
+                if retry_result.ok
+                else f"CODEX_ERROR: {retry_result.error or retry_result.stderr}"
+            )
+            response = retry_response
+            result = retry_result
+            metrics = self._codex_sender_metrics(response)
+
+        final_leak_count = metrics.get("codex_compact_human_leak_count", 0)
+        final_failed = (
+            final_leak_count > 0
+            or not metrics.get("codex_compact_field_present", False)
+            or not metrics.get("codex_compact_message_extracted", "").strip()
+        )
+        metrics.update(
+            {
+                "codex_initial_leak_count": initial_metrics.get("codex_compact_human_leak_count", 0),
+                "codex_initial_human_leaks": initial_metrics.get("codex_compact_human_leaks", []),
+                "codex_initial_compact_message": initial_metrics.get("codex_compact_message_extracted", ""),
+                "codex_retry_leak_count": final_leak_count if retry_count else 0,
+                "codex_retry_human_leaks": metrics.get("codex_compact_human_leaks", []) if retry_count else [],
+                "codex_retry_compact_message": metrics.get("codex_compact_message_extracted", "") if retry_count else "",
+                "codex_retry_used": retry_count > 0,
+                "codex_strict_recovered": retry_count > 0 and not final_failed,
+                "codex_strict_failed": final_failed,
+                "codex_retry_count": retry_count,
+            }
+        )
+        return response, result, metrics, retry_count
+
+    def _codex_retry_needed(self, metrics: dict[str, Any]) -> bool:
+        return (
+            metrics.get("codex_compact_human_leak_count", 0) > 0
+            or not metrics.get("codex_compact_field_present", False)
+            or not metrics.get("codex_compact_message_extracted", "").strip()
+        )
+
+    def _build_codex_retry_prompt(
+        self,
+        compact_message: str,
+        compact_human_leaks: list[str],
+        compact_field_present: bool,
+        previous_response: str,
+        context: str,
+        category: str,
+        turn: int,
+    ) -> str:
+        field_problem = "missing <COMPACT> field" if not compact_field_present else "human words in <COMPACT>"
+        return f"""Your previous Codex sender message violated Phase {self.phase_id} strict compact-only mode.
+Problem: {field_problem}.
+
+Rewrite the Codex sender message only. Use this structure:
+<COMPACT>compact tokens only here</COMPACT>
+<NEW human_meaning = compact_token> optional
+<EVOLVE old_token -> new_token reason> optional
+<NOTE>one short note if needed</NOTE>
+
+Hard rules:
+- You are Agent A / Sender.
+- Output the <COMPACT> field first.
+- The <COMPACT> field must contain only compact tokens from {self.language_map_path} or tokens declared with valid <NEW>/<EVOLVE> markers.
+- Do not explain in English or Romanian inside <COMPACT>.
+- Human text is allowed only outside <COMPACT>, inside <NEW human_meaning = compact_token>, inside <EVOLVE old_token -> new_token reason>, or inside <NOTE>.
+- Separate compact tokens with spaces.
+
+Previous compact field:
+{compact_message or "none"}
+
+Human leaks detected in compact field:
+{", ".join(compact_human_leaks) if compact_human_leaks else "none"}
+
+Active category: {category}
+Turn: {turn}
+
+Focused language-map tokens:
+{self._strict_batch_summary(self._strict_language_batch(category, limit=60))}
+
+Original sender context:
+{excerpt(context, 2200)}
+
+Previous full response:
+{excerpt(previous_response, 1800)}
+"""
+
     def _finalize_qwen_receiver_response(
         self,
         initial_response: str,
@@ -1075,6 +1302,8 @@ Rules:
 - Human language is allowed only inside the DECODE meaning field.
 - REPLY compact must use compact tokens only.
 - If you cannot decode, use meaning="UNKNOWN" and <REPLY compact="STRICT_FAIL_NO_TOKEN">.
+- Do not output ACK, OK, yes, no, <COMPACT>, <ANSWER>, <NOTE>, or any explanatory prose.
+- Never put a <NEW> marker inside REPLY compact.
 
 Compact input token decoder hints:
 {self._compact_token_hints(codex_compact_input)}
@@ -1093,8 +1322,11 @@ Required output:
 
 Rules:
 - Do not include human words in REPLY compact.
-- Use compact tokens from {self.language_map_path} or tokens declared with <NEW>.
-- If you cannot form a compact reply, use <REPLY compact="STRICT_FAIL_NO_TOKEN">.
+- Do not output DECODE again. Do not output ACK, OK, yes, no, <COMPACT>, <ANSWER>, or <NOTE>.
+- Never put a <NEW> marker inside REPLY compact.
+- Use compact tokens from {self.language_map_path} or tokens already declared with <NEW>.
+- If you cannot form a compact reply, output exactly <REPLY compact="STRICT_FAIL_NO_TOKEN">.
+- When uncertain, prefer <REPLY compact="STRICT_FAIL_NO_TOKEN"> over inventing text.
 
 Codex compact input:
 {codex_compact_input}
@@ -1355,8 +1587,11 @@ def format_vocabulary_batch(batch: list[dict[str, str]]) -> str:
 
 def strict_scored_text(text: str) -> str:
     compact_parts = COMPACT_ATTR_RE.findall(text)
-    cleaned = REPLY_COMPACT_TAG_RE.sub(" ", text)
+    compact_parts.extend(match.group("compact") for match in COMPACT_BLOCK_RE.finditer(text))
+    cleaned = COMPACT_BLOCK_RE.sub(" ", text)
+    cleaned = REPLY_COMPACT_TAG_RE.sub(" ", cleaned)
     cleaned = FIELD_TAG_RE.sub(" ", cleaned)
+    cleaned = NOTE_BLOCK_RE.sub(" ", cleaned)
     cleaned = NEW_OR_EVOLVE_RE.sub(" ", cleaned)
     return " ".join(compact_parts + [cleaned])
 
@@ -1418,6 +1653,53 @@ def strict_record_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
     return {key: metrics.get(key, [] if key in list_keys else 0) for key in keys}
 
 
+def codex_sender_record_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    list_keys = {
+        "codex_compact_human_leaks",
+        "codex_compact_unknown_tokens",
+        "codex_initial_human_leaks",
+        "codex_retry_human_leaks",
+    }
+    bool_keys = {
+        "codex_compact_field_present",
+        "codex_retry_used",
+        "codex_strict_recovered",
+        "codex_strict_failed",
+    }
+    keys = (
+        "codex_compact_field_present",
+        "codex_initial_leak_count",
+        "codex_retry_leak_count",
+        "codex_retry_used",
+        "codex_strict_recovered",
+        "codex_strict_failed",
+        "codex_compact_only_score",
+        "codex_dictionary_token_usage_rate",
+        "codex_compact_message_extracted",
+        "codex_compact_human_leak_count",
+        "codex_compact_human_leaks",
+        "codex_compact_unknown_token_count",
+        "codex_compact_unknown_tokens",
+        "codex_compact_dictionary_tokens_used_count",
+        "codex_compact_leak_penalty",
+        "codex_initial_human_leaks",
+        "codex_initial_compact_message",
+        "codex_retry_human_leaks",
+        "codex_retry_compact_message",
+        "codex_retry_count",
+    )
+    record: dict[str, Any] = {}
+    for key in keys:
+        if key in list_keys:
+            default: Any = []
+        elif key in bool_keys:
+            default = False
+        else:
+            default = 0
+        record[key] = metrics.get(key, default)
+    return record
+
+
 def qwen_receiver_record_metrics(metrics: dict[str, Any], response: str) -> dict[str, Any]:
     list_keys = {"reply_human_leaks", "qwen_reply_human_leaks", "qwen_reply_unknown_tokens"}
     keys = (
@@ -1442,6 +1724,7 @@ def qwen_receiver_record_metrics(metrics: dict[str, Any], response: str) -> dict
         "qwen_reply_unknown_tokens",
         "qwen_reply_token_usage_rate",
         "qwen_retry_count",
+        "qwen_prompt_path",
     )
     record = {
         key: metrics.get(key, [] if key in list_keys else "")
@@ -1451,7 +1734,17 @@ def qwen_receiver_record_metrics(metrics: dict[str, Any], response: str) -> dict
     return record
 
 
+def compact_block_text(text: str) -> str:
+    match = COMPACT_BLOCK_RE.search(text)
+    if not match:
+        return ""
+    return " ".join(match.group("compact").split()).strip()
+
+
 def strict_compact_message(text: str) -> str:
+    compact = compact_block_text(text)
+    if compact:
+        return compact[:500]
     for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.upper().startswith("<NEW") or stripped.upper().startswith("<EVOLVE"):
@@ -1578,6 +1871,18 @@ def strict_markdown_metrics(record: dict[str, Any]) -> str:
         f"Unknown tokens: `{record.get('unknown_token_count', 0)}`",
         f"Strict compliance: `{record.get('strict_language_compliance_score', 0.0)}`",
     ]
+    if record.get("speaker") == "Codex":
+        lines.extend(
+            [
+                f"Codex compact field present: `{record.get('codex_compact_field_present', False)}`",
+                f"Codex initial leaks: `{record.get('codex_initial_leak_count', 0)}`",
+                f"Codex retry used: `{record.get('codex_retry_used', False)}`",
+                f"Codex retry leaks: `{record.get('codex_retry_leak_count', 0)}`",
+                f"Codex strict recovered: `{record.get('codex_strict_recovered', False)}`",
+                f"Codex strict failed: `{record.get('codex_strict_failed', False)}`",
+                f"Codex compact-only score: `{record.get('codex_compact_only_score', 0.0)}`",
+            ]
+        )
     if record.get("speaker") == "Qwen":
         lines.extend(
             [

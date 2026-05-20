@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--show-phase", type=int)
     parser.add_argument("--show-rewards", action="store_true")
     parser.add_argument("--show-strict-language-report", action="store_true")
+    parser.add_argument("--show-latest-qwen-prompt", action="store_true")
     parser.add_argument("--generate-dictionary-2000", action="store_true")
     parser.add_argument("--validate-dictionary-2000", action="store_true")
     parser.add_argument("--generate-dictionary-4000", action="store_true")
@@ -76,6 +77,8 @@ def main() -> int:
         return show_rewards(root)
     if args.show_strict_language_report:
         return show_strict_language_report(root)
+    if args.show_latest_qwen_prompt:
+        return show_latest_qwen_prompt(root)
     if args.generate_dictionary_2000:
         return generate_dictionary_2000_command(root)
     if args.validate_dictionary_2000:
@@ -288,6 +291,19 @@ def show_strict_language_report(root: Path) -> int:
         print("No strict language markdown files found.")
         return 1
     print(paths[-1].read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def show_latest_qwen_prompt(root: Path) -> int:
+    prompt_root = root / "results" / "qwen_prompts"
+    paths = sorted(prompt_root.glob("*/*.txt"), key=lambda path: path.stat().st_mtime)
+    if not paths:
+        print("No saved Qwen prompts found in results/qwen_prompts/.")
+        return 1
+    latest = paths[-1]
+    print(f"Qwen prompt: {latest}")
+    print("")
+    print(latest.read_text(encoding="utf-8"), end="")
     return 0
 
 

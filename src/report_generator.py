@@ -414,6 +414,7 @@ class ReportGenerator:
         records = debate_result.get("records", [])
         tests = debate_result.get("tests", [])
         phase_id = debate_result.get("phase_id", 6)
+        codex_records = [record for record in records if record.get("speaker") == "Codex"]
         qwen_records = [record for record in records if record.get("speaker") == "Qwen"]
         leaks = [
             record
@@ -456,6 +457,17 @@ class ReportGenerator:
             record.get("sender_receiver_alignment_score", 0.0)
             for record in qwen_records
         ]
+        codex_scores = [
+            record.get("codex_compact_only_score", 0.0)
+            for record in codex_records
+        ]
+        codex_usage = [
+            record.get("codex_dictionary_token_usage_rate", 0.0)
+            for record in codex_records
+        ]
+        codex_retries = sum(1 for record in codex_records if record.get("codex_retry_used"))
+        codex_recovered = sum(1 for record in codex_records if record.get("codex_strict_recovered"))
+        codex_failed = sum(1 for record in codex_records if record.get("codex_strict_failed"))
         total_leaks = sum(record.get("human_words_leaked_count", 0) for record in records)
         total_penalty = sum(record.get("human_leak_penalty_total", 0) for record in records)
         reply_leaks = sum(record.get("qwen_reply_human_leak_count", 0) for record in qwen_records)
@@ -481,6 +493,11 @@ class ReportGenerator:
             f"- Total leak penalty: `{total_penalty}`",
             f"- Average dictionary token usage: `{safe_mean(usage):.4f}`",
             f"- Average strict compliance: `{safe_mean(compliance):.4f}`",
+            f"- Codex retries used: `{codex_retries}`",
+            f"- Codex strict recoveries: `{codex_recovered}`",
+            f"- Codex strict failures: `{codex_failed}`",
+            f"- Average Codex compact-only score: `{safe_mean(codex_scores):.4f}`",
+            f"- Average Codex dictionary token usage: `{safe_mean(codex_usage):.4f}`",
             f"- Qwen decode successes: `{decode_successes}/{len(qwen_records)}`",
             f"- Qwen reply human leaks: `{reply_leaks}`",
             f"- Average Qwen receiver score: `{safe_mean(qwen_receiver_scores):.4f}`",
@@ -488,6 +505,18 @@ class ReportGenerator:
             f"- Average sender/receiver alignment: `{safe_mean(qwen_alignment_scores):.4f}`",
             f"- Strict markdown: `{debate_result.get('markdown_path', '')}`",
             f"- Strict JSONL: `{debate_result.get('jsonl_path', '')}`",
+            "",
+            "## Codex Strict Compliance",
+            codex_strict_summary(codex_records),
+            "",
+            "## Codex Initial vs Retry",
+            codex_retry_table(codex_records),
+            "",
+            "## Codex Human Leakage",
+            codex_leak_table(codex_records),
+            "",
+            "## Codex Compact Message Extracted",
+            codex_compact_table(codex_records),
             "",
             "## Qwen Receiver Summary",
             qwen_receiver_summary(qwen_records),
@@ -743,6 +772,92 @@ def strict_reward_progress_table(tests: list[dict[str, Any]]) -> str:
             f"{test.get('compression_ratio', 0.0)} | "
             f"{test.get('decode_success_score', 0.0)} | "
             f"`{escape_table(str(test.get('sender_compact_sentence', '')))}` |"
+        )
+    return "\n".join(lines)
+
+
+def codex_strict_summary(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return "- No Codex sender records were captured."
+    retries = sum(1 for record in records if record.get("codex_retry_used"))
+    recovered = sum(1 for record in records if record.get("codex_strict_recovered"))
+    failed = sum(1 for record in records if record.get("codex_strict_failed"))
+    initial_leaks = sum(record.get("codex_initial_leak_count", 0) for record in records)
+    final_leaks = sum(record.get("codex_compact_human_leak_count", 0) for record in records)
+    usage = [record.get("codex_dictionary_token_usage_rate", 0.0) for record in records]
+    scores = [record.get("codex_compact_only_score", 0.0) for record in records]
+    return "\n".join(
+        [
+            f"- Codex turns: `{len(records)}`",
+            f"- Initial compact-field leaks: `{initial_leaks}`",
+            f"- Final compact-field leaks: `{final_leaks}`",
+            f"- Retries used: `{retries}`",
+            f"- Strict recoveries: `{recovered}`",
+            f"- Strict failures: `{failed}`",
+            f"- Average dictionary token usage: `{safe_mean(usage):.4f}`",
+            f"- Average compact-only score: `{safe_mean(scores):.4f}`",
+        ]
+    )
+
+
+def codex_retry_table(records: list[dict[str, Any]], limit: int = 40) -> str:
+    if not records:
+        return "- No Codex sender records were captured."
+    lines = [
+        "| Turn | Initial Leaks | Retry Used | Retry Leaks | Recovered | Failed | Score |",
+        "|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for record in records[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | "
+            f"{record.get('codex_initial_leak_count', 0)} | "
+            f"{record.get('codex_retry_used', False)} | "
+            f"{record.get('codex_retry_leak_count', 0)} | "
+            f"{record.get('codex_strict_recovered', False)} | "
+            f"{record.get('codex_strict_failed', False)} | "
+            f"{record.get('codex_compact_only_score', 0.0)} |"
+        )
+    return "\n".join(lines)
+
+
+def codex_leak_table(records: list[dict[str, Any]], limit: int = 20) -> str:
+    leaking = [
+        record
+        for record in records
+        if record.get("codex_compact_human_leak_count", 0) > 0
+    ]
+    if not leaking:
+        return "- No human leakage was detected inside Codex COMPACT fields."
+    lines = [
+        "| Turn | Leaks | Penalty | Words | Compact Message |",
+        "|---:|---:|---:|---|---|",
+    ]
+    for record in sorted(leaking, key=lambda item: item.get("codex_compact_human_leak_count", 0), reverse=True)[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | "
+            f"{record.get('codex_compact_human_leak_count', 0)} | "
+            f"{record.get('codex_compact_leak_penalty', record.get('human_leak_penalty_total', 0))} | "
+            f"{escape_table(', '.join(record.get('codex_compact_human_leaks', [])[:12]))} | "
+            f"`{escape_table(str(record.get('codex_compact_message_extracted', '')))}` |"
+        )
+    return "\n".join(lines)
+
+
+def codex_compact_table(records: list[dict[str, Any]], limit: int = 40) -> str:
+    if not records:
+        return "- No Codex compact messages were captured."
+    lines = [
+        "| Turn | Field Present | Usage | Unknown | Score | Compact Message |",
+        "|---:|---:|---:|---:|---:|---|",
+    ]
+    for record in records[:limit]:
+        lines.append(
+            f"| {record.get('turn', '')} | "
+            f"{record.get('codex_compact_field_present', False)} | "
+            f"{record.get('codex_dictionary_token_usage_rate', 0.0)} | "
+            f"{record.get('codex_compact_unknown_token_count', 0)} | "
+            f"{record.get('codex_compact_only_score', 0.0)} | "
+            f"`{escape_table(str(record.get('codex_compact_message_extracted', '')))}` |"
         )
     return "\n".join(lines)
 
